@@ -1,5 +1,7 @@
 import os
+import re
 import sys
+from typing import Optional
 import uuid
 import threading
 import subprocess
@@ -9,13 +11,31 @@ import base64
 import smtplib
 from email.message import EmailMessage
 import pandas as pd
-import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, Response, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from repositories.liq_repository import LiqRepository
+from datetime import datetime
+
+import uvicorn
+from database.supabase_client import get_supabase
+import logging
+from database.supabase_client import (
+    import_actas_from_rows,
+    insert_acta,
+    get_pagos_2026_resumen,
+    get_actas_by_escritura,
+    get_acta_by_id,
+    upsert_pago_2026,
+    update_acta,
+    delete_acta,
+)
+from supabase_auth import Any, datetime
+
+# Silenciar las peticiones HTTP del logger de acceso de uvicorn
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 from services.workflow_service import WorkflowService
+
 load_dotenv()
 try:
     # Intenta importación relativa (cuando se usa como paquete)
@@ -23,10 +43,6 @@ try:
         insert_log,
         get_supabase,
         check_table_exists,
-        insert_certificado,
-        update_certificado_estado,
-        get_certificados_por_usuario,
-        insert_recibo,
         guardar_descarga,
         obtener_descargas_por_escritura,
         obtener_descargas_pendientes_de_envio,
@@ -34,6 +50,10 @@ try:
         import_liq_from_rows,
         import_pagos_from_rows,
         import_pagos_consolidado_from_rows,
+        import_actas_from_rows,
+        update_acta,
+        delete_acta,
+        upsert_pago_2026,
     )
     from database.supabase_client import insert_liq_row, update_liq_row, get_pending_liq, update_liq_estado_by_escritura
     from database.supabase_client import get_liq_stats
@@ -46,29 +66,21 @@ except ImportError:
         insert_log,
         get_supabase,
         check_table_exists,
-        insert_certificado,
-        update_certificado_estado,
-        get_certificados_por_usuario,
-        insert_recibo,
-        guardar_descarga,
         obtener_descargas_por_escritura,
         obtener_descargas_pendientes_de_envio,
         marcar_descarga_como_enviada,
         import_liq_from_rows,
         import_pagos_from_rows,
         import_pagos_consolidado_from_rows,
+        import_actas_from_rows,
+        get_actas_by_escritura,
+        get_acta_by_id,
+        update_acta,
+        delete_acta,
     )
-    from database.supabase_client import insert_liq_row, update_liq_row, get_pending_liq, update_liq_estado_by_escritura
-    from database.supabase_client import get_liq_stats
-    from database.supabase_client import get_all_liq, get_processed_liq
-    from database.supabase_client import move_liq_to_table, export_liq_to_excel
-    from database.supabase_client import get_table_rows
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
-HTML_FILE = os.path.join(STATIC_DIR, "notaria_app.html")
-if not os.path.exists(HTML_FILE):
-    HTML_FILE = os.path.join(APP_DIR, "notaria_app.html")
 SQL_SCHEMA_FILE = Path(APP_DIR, "supabase_schema_from_excel.sql")
 
 app = FastAPI()
@@ -185,72 +197,27 @@ def _run_script_job(job_id: str, script_name: str, args: list = None):
         JOBS[job_id]["status"] = "error"
         _append(job_id, f"[EXCEPTION] {type(e).__name__}: {e}")
 
-@app.get('/api/dashboard/status')
-def dashboard_status():
+def _run_workflow_job(job_id: str, method_name: str, body: dict = None):
+    """Helper para ejecutar un método del WorkflowService en background."""
     try:
-        repo = LiqRepository()
-
-        pendientes_certificados = len(
-            repo.certificados_pendientes()
-        )
-        procesando = len(
-            repo.certificados_procesando()
-        )
-        total = (
-            repo.supabase
-            .table('liq')
-            .select('*', count='exact')
-            .execute()
-        )
-        pendientes_recibos = (
-            repo.supabase
-            .table('liq')
-            .select('*', count='exact')
-            .eq('notificacion', 'pendiente')
-            .execute()
-        )
-        recibos_enviados = (
-            repo.supabase
-            .table('liq')
-            .select('*', count='exact')
-            .eq('notificacion', 'enviado')
-            .execute()
-        )
-        certificados_enviados = (
-            repo.supabase
-            .table('liq')
-            .select('*', count='exact')
-            .eq('estado_ctl', 'certificado')
-            .execute()
-        )
-        errores = (
-            repo.supabase
-            .table('logss')
-            .select('*', count='exact')
-            .eq('estado', 'error')
-            .execute()
-        )
-
-        return {
-            'total_registros': total.count or 0,
-            'pendientes_certificados': pendientes_certificados,
-            'procesando': procesando,
-            'recibos_pendientes': pendientes_recibos.count or 0,
-            'recibos_enviados': recibos_enviados.count or 0,
-            'certificados_enviados': certificados_enviados.count or 0,
-            'errores': errores.count or 0
-        }
+        JOBS[job_id]["status"] = "running"
+        workflow = WorkflowService()
+        method = getattr(workflow, method_name)
+        if body is not None:
+            method(body)
+        else:
+            method()
+        JOBS[job_id]["returncode"] = 0
+        JOBS[job_id]["status"] = "done"
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al obtener estado del dashboard: {str(e)}"
-        )
+        JOBS[job_id]["status"] = "error"
+        _append(job_id, f"[EXCEPTION] {type(e).__name__}: {e}")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    if not os.path.exists(HTML_FILE):
-        raise HTTPException(status_code=404, detail="No se encontró la interfaz principal")
-    with open(HTML_FILE, "r", encoding="utf-8") as f:
+    # Servir la aplicación oficial desde el directorio estático.
+    html_path = os.path.join(STATIC_DIR, "notaria_app.html")
+    with open(html_path, "r", encoding="utf-8") as f:
         return f.read()
 
 @app.get("/health")
@@ -263,16 +230,42 @@ def start_descarga_certificados():
     JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
     t = threading.Thread(target=_run_certificados_job, args=(job_id,), daemon=True)
     t.start()
-
+    # Registrar inicio en logs (si supabase no está configurado, se imprimirá)
     try:
         insert_log("descarga_certificados", f"Job iniciado: {job_id}", "sistema")
     except Exception:
         pass
     return {"job_id": job_id}
 
-
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+
+@app.post("/api/envios/certificados/start")
+def start_envio_certificados():
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
+    t = threading.Thread(target=_run_workflow_job, args=(job_id, 'ejecutar_envio_certificados'), daemon=True)
+    t.start()
+    return {"job_id": job_id}
+
+@app.post("/api/envios/certificados/unico/start")
+def start_envio_certificado_unico(body: dict):
+    if not isinstance(body, dict) or not body.get("escritura") or not body.get("correo"):
+        raise HTTPException(status_code=400, detail="Escritura y correo son obligatorios")
+
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
+    t = threading.Thread(target=_run_workflow_job, args=(job_id, 'ejecutar_envio_certificado', body), daemon=True)
+    t.start()
+    return {"job_id": job_id}
+
+@app.post("/api/envios/recibos/start")
+def start_envio_recibos():
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
+    t = threading.Thread(target=_run_workflow_job, args=(job_id, 'ejecutar_recibos'), daemon=True)
+    t.start()
+    return {"job_id": job_id}
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
@@ -324,7 +317,7 @@ def listar_pending(limit: int = 10000, page: int = 1, sort_by: str = 'escritura'
         if not get_supabase():
             raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
         res = get_pending_liq(limit=limit, page=page, sort_by=sort_by, desc=desc)
-        return res.data
+        return res.data if hasattr(res, "data") else res
     except Exception as e:
         insert_log("consulta_liq", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -344,26 +337,653 @@ def liq_stats():
             pass
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/dashboard/status")
+def dashboard_status():
+    """Retorna un resumen del estado del sistema y tareas para el Dashboard."""
+    try:
+        # Reutilizamos las estadísticas de liquidaciones que ya tienes programadas
+        stats = get_liq_stats()
+    except Exception:
+        stats = {"total": 0, "liq": 0, "liq_2025": 0, "liq_2026": 0}
+        
+    # Contamos de forma rápida cuántas tareas en background están activas
+    active_jobs = sum(1 for j in JOBS.values() if j.get("status") in ["running", "queued"])
+
+    return {
+        "status": "online",
+        "database_connected": get_supabase() is not None,
+        "active_background_jobs": active_jobs,
+        "stats": stats
+    }
+
+@app.post("/api/actas/import")
+async def import_actas_file(file: UploadFile = File(...), anio: int = 2026):
+    """
+    Importa actas de depósito desde el CSV/Excel crudo que exporta el sistema
+    (ej. 'ConsultaRegistrosActasDeposito'). Reproduce en Python lo que hacía la macro
+    'Depurar' de Excel:
+      - Descarta filas con Tipo Deposito = 'Derechos Notariales' (no aplica a Vr_Ben/Vr_Reg)
+      - Descarta filas sin escritura asignada todavía (Escritura = '---')
+      - Extrae el número de escritura de formatos como '1244 de 2026'
+      - Convierte 'Fecha Acta' (ej. '24/Jul/2026 11:16 am') a fecha ISO
+    No hace falta correr la macro antes de subir el archivo.
+    """
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+
+        contents = await file.read()
+        nombre = (file.filename or "").lower()
+        if nombre.endswith(('.xlsx', '.xls', '.xlsm')):
+            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+        else:
+            text = contents.decode('utf-8-sig', errors='replace')
+            sep = ';' if text.split('\n', 1)[0].count(';') > text.split('\n', 1)[0].count(',') else ','
+            df = pd.read_csv(io.StringIO(text), dtype=str, sep=sep)
+
+        df.columns = [str(c).strip() for c in df.columns]
+        df = df.where(pd.notna(df), None)
+
+        rename_map = {
+            'Acta': 'acta', 'Fecha Acta': 'fecha_acta', 'Tipo Deposito': 'tipo_deposito',
+            'Depositante': 'cliente', 'Documento': 'documento', 'Radicado': 'radicado',
+            'Escritura': 'escritura', 'Valor Acta': 'valor_acta', 'Estado': 'estado',
+            'Constructora': 'constructora',
+        }
+        df = df.rename(columns=rename_map)
+
+        def limpiar(v):
+            """Convierte NaN/None a None de forma segura; strip() a lo demás.
+            Necesario porque df.where(pd.notna(df), None) no siempre reemplaza los NaN
+            cuando la columna quedó con dtype 'str' de pandas, dejando floats NaN sueltos."""
+            if v is None:
+                return None
+            if isinstance(v, float) and pd.isna(v):
+                return None
+            s = str(v).strip()
+            return s or None
+
+        MESES = {
+            'ene': 1, 'jan': 1, 'feb': 2, 'mar': 3, 'abr': 4, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'ago': 8, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dic': 12, 'dec': 12,
+        }
+
+        def parsear_fecha(raw):
+            raw = limpiar(raw)
+            if not raw:
+                return None
+
+            formats = [
+                '%d/%m/%y', '%d/%m/%Y',
+                '%d-%m-%y', '%d-%m-%Y',
+                '%d/%b/%Y', '%d/%B/%Y',
+                '%d-%b-%Y', '%d-%B-%Y',
+                '%Y-%m-%d', '%Y/%m/%d',
+            ]
+            for fmt in formats:
+                try:
+                    return datetime.strptime(raw, fmt).date().isoformat()
+                except ValueError:
+                    continue
+
+            m = re.match(r'(\d{1,2})/([A-Za-z]{3})/(\d{4})', raw)
+            if m:
+                dia, mes_txt, anio_txt = m.groups()
+                mes = MESES.get(mes_txt.lower())
+                if not mes:
+                    return None
+                try:
+                    return datetime(int(anio_txt), mes, int(dia)).date().isoformat()
+                except ValueError:
+                    return None
+
+            return None
+
+        def parsear_valor(raw):
+            raw = limpiar(raw)
+            if raw is None:
+                return 0
+            limpio = re.sub(r'[^\d]', '', raw)
+            return int(limpio) if limpio else 0
+
+        tipos_validos = {'Beneficencia', 'Registro Instrumentos Publicos'}
+        omitidas_tipo = 0
+        omitidas_sin_escritura = 0
+        filas = []
+
+        for row in df.to_dict(orient='records'):
+            tipo = limpiar(row.get('tipo_deposito')) or ''
+            if tipo not in tipos_validos:
+                omitidas_tipo += 1
+                continue
+
+            esc_match = re.search(r'\d+', limpiar(row.get('escritura')) or '')
+            if not esc_match:
+                omitidas_sin_escritura += 1
+                continue
+
+            filas.append({
+                'escritura': int(esc_match.group()),
+                'acta': limpiar(row.get('acta')) or '',
+                'fecha_acta': parsear_fecha(row.get('fecha_acta')),
+                'tipo_deposito': tipo,
+                'cliente': limpiar(row.get('cliente')),
+                'documento': limpiar(row.get('documento')),
+                'radicado': limpiar(row.get('radicado')),
+                'anio': anio,
+                'valor_acta': parsear_valor(row.get('valor_acta')),
+                'constructora': limpiar(row.get('constructora')),
+                'estado': limpiar(row.get('estado')),
+            })
+
+        if not filas:
+            raise HTTPException(
+                status_code=400,
+                detail="No se encontraron filas válidas para importar. Revisa que el archivo tenga columnas "
+                       "'Tipo Deposito' (Beneficencia / Registro Instrumentos Publicos) y 'Escritura' asignada."
+            )
+
+        result = import_actas_from_rows(filas, batch_size=200)
+        result['omitidas_derechos_notariales'] = omitidas_tipo
+        result['omitidas_sin_escritura'] = omitidas_sin_escritura
+
+        try:
+            insert_log("import_actas", f"Archivo {file.filename}: {result['nuevos']} nuevos, "
+                                        f"{omitidas_tipo} omitidas por tipo, {omitidas_sin_escritura} sin escritura", "sistema")
+        except Exception:
+            pass
+
+        return {"status": "ok", "import_result": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/pagos2026")
+def pagos2026_resumen():
+    """Lista las escrituras que tienen actas registradas, con el match Vr_Ben+Vr_Reg vs. lo pagado."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        return get_pagos_2026_resumen()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/pagos2026/{escritura}/actas")
+def pagos2026_actas_detalle(escritura: int):
+    """Devuelve las actas individuales de una escritura (para la vista de detalle)."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        return get_actas_by_escritura(escritura)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.patch("/api/pagos2026/{escritura}")
+def actualizar_pago2026(escritura: int, body: dict):
+    """Actualiza los valores manuales de una escritura: Vr_Ben, Vr_Reg y fecha proyectada de pago."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+
+        result = upsert_pago_2026(
+            escritura,
+            vr_ben=body.get('vr_ben'),
+            vr_reg=body.get('vr_reg'),
+            fecha_pago=body.get('fecha_pago'),
+            observaciones=body.get('observaciones'),
+            nir=body.get('nir'),
+            responsable=body.get('responsable'),
+        )
+        data = result.data if hasattr(result, "data") else result
+        return {"status": "ok", "updated": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            insert_log("actualizar_pago2026", str(e), "sistema", "error")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/actas")
+def crear_acta(body: dict):
+    """Registra una nueva acta. La escritura queda automáticamente asignada al módulo Pagos 2026."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        if not body.get('escritura'):
+            raise HTTPException(status_code=400, detail="Falta el campo 'escritura'")
+        if body.get('tipo_deposito') not in ('Beneficencia', 'Registro Instrumentos Publicos'):
+            raise HTTPException(status_code=400, detail="tipo_deposito debe ser 'Beneficencia' o 'Registro Instrumentos Publicos'")
+        body.setdefault('anio', 2026)
+
+        result = insert_acta(body)
+        data = result.data if hasattr(result, "data") else result
+        return {"status": "ok", "inserted": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            insert_log("crear_acta", str(e), "sistema", "error")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/actas/{acta_id}")
+def obtener_acta(acta_id: int):
+    """Devuelve una acta por su id."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        response = get_acta_by_id(acta_id)
+        if not response:
+            raise HTTPException(status_code=404, detail="Acta no encontrada")
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            insert_log("obtener_acta", str(e), "sistema", "error")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/actas/{acta_id}")
+def actualizar_acta(acta_id: int, body: dict):
+    """Actualiza una acta registrada por su id."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        if body.get('tipo_deposito') and body.get('tipo_deposito') not in ('Beneficencia', 'Registro Instrumentos Publicos'):
+            raise HTTPException(status_code=400, detail="tipo_deposito debe ser 'Beneficencia' o 'Registro Instrumentos Publicos'")
+
+        result = update_acta(acta_id, body)
+        data = result.data if hasattr(result, "data") else result
+        return {"status": "ok", "updated": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            insert_log("actualizar_acta", str(e), "sistema", "error")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/actas/{acta_id}")
+def borrar_acta(acta_id: int):
+    """Elimina una acta por su id."""
+    try:
+        if not get_supabase():
+            raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+
+        result = delete_acta(acta_id)
+        data = result.data if hasattr(result, "data") else result
+        return {"status": "ok", "deleted": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            insert_log("borrar_acta", str(e), "sistema", "error")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/pagos2026/informe", response_class=HTMLResponse)
+def generar_informe_pagos(fecha_pago: Optional[str] = None):
+    try:
+        db = get_supabase()
+        if not db:
+            raise HTTPException(status_code=503, detail="Supabase no configurado.")
+
+        fecha_filtro = None
+        fecha_mostrar = datetime.now().strftime('%d/%m/%Y')  # Por defecto la fecha actual de Colombia
+
+        if fecha_pago:
+            fecha_pago = fecha_pago.strip()
+            if "/" in fecha_pago:
+                partes = fecha_pago.split("/")
+                if len(partes) == 3:
+                    # Si viene como DD/MM/YYYY
+                    if len(partes[0]) == 2 and len(partes[2]) == 4:
+                        fecha_filtro = f"{partes[2]}-{partes[1]}-{partes[0]}"  # YYYY-MM-DD para BD
+                        fecha_mostrar = f"{partes[0]}/{partes[1]}/{partes[2]}"  # DD/MM/YYYY para pantalla
+                    # Si viene como YYYY/MM/DD
+                    elif len(partes[0]) == 4:
+                        fecha_filtro = f"{partes[0]}-{partes[1]}-{partes[2]}"
+                        fecha_mostrar = f"{partes[2]}/{partes[1]}/{partes[0]}"
+            elif "-" in fecha_pago:
+                partes = fecha_pago.split("-")
+                if len(partes) == 3:
+                    # Si viene como YYYY-MM-DD
+                    if len(partes[0]) == 4:
+                        fecha_filtro = fecha_pago
+                        fecha_mostrar = f"{partes[2]}/{partes[1]}/{partes[0]}"
+                    # Si viene como DD-MM-YYYY
+                    elif len(partes[2]) == 4:
+                        fecha_filtro = f"{partes[2]}-{partes[1]}-{partes[0]}"
+                        fecha_mostrar = f"{partes[0]}/{partes[1]}/{partes[2]}"
+
+        # 2. Consultar actas ordenadas por ID y construir mapa con fallback de campos
+        actas_resp = db.table('actas') \
+            .select('id, escritura, acta, cliente, documento, radicado, constructora, estado, valor_acta') \
+            .order('id', desc=False) \
+            .execute()
+
+        actas_data = actas_resp.data or []
+
+        mapa_actas = {}
+        for a in actas_data:
+            esc_k = str(normalizar_escritura(a.get('escritura'))).strip()
+            if not esc_k:
+                continue
+
+            # Extraer y limpiar datos
+            doc_actual = str(a.get("documento") or "").strip()
+            doc_actual = "" if doc_actual in ["None", "NaN"] else doc_actual
+
+            cli_actual = str(a.get("cliente") or "").strip()
+            cli_actual = "" if cli_actual in ["None", "NaN"] else cli_actual
+
+            rad_actual = str(a.get("radicado") or "").strip()
+            rad_actual = "" if rad_actual in ["None", "NaN"] else rad_actual
+
+            con_actual = str(a.get("constructora") or "").strip()
+            con_actual = "" if con_actual in ["None", "NaN"] else con_actual
+
+            est_actual = str(a.get("estado") or "").strip()
+            est_actual = "" if est_actual in ["None", "NaN"] else est_actual
+
+            if esc_k not in mapa_actas:
+                mapa_actas[esc_k] = {
+                    "actas": [],
+                    "cliente": cli_actual,
+                    "documento": doc_actual,
+                    "radicado": rad_actual,
+                    "constructora": con_actual,
+                    "estado": est_actual,
+                    "pago_cli": 0.0
+                }
+            else:
+                # Fallback: completar datos que venían vacíos
+                if not mapa_actas[esc_k]["cliente"] and cli_actual:
+                    mapa_actas[esc_k]["cliente"] = cli_actual
+                if not mapa_actas[esc_k]["documento"] and doc_actual:
+                    mapa_actas[esc_k]["documento"] = doc_actual
+                if not mapa_actas[esc_k]["radicado"] and rad_actual:
+                    mapa_actas[esc_k]["radicado"] = rad_actual
+                if not mapa_actas[esc_k]["constructora"] and con_actual:
+                    mapa_actas[esc_k]["constructora"] = con_actual
+                if not mapa_actas[esc_k]["estado"] and est_actual:
+                    mapa_actas[esc_k]["estado"] = est_actual
+
+            # Acumular monto total de actas
+            val_acta = float(a.get('valor_acta') or 0)
+            mapa_actas[esc_k]["pago_cli"] += val_acta
+
+            # Agregar número de acta sin duplicar
+            acta_num = str(a.get("acta") or "").strip()
+            if acta_num and acta_num not in mapa_actas[esc_k]["actas"]:
+                mapa_actas[esc_k]["actas"].append(acta_num)
+
+        # 3. Consultar pagos_2026 con filtro opcional de fecha
+        query = db.table("pagos_2026").select("*")
+        if fecha_filtro:
+            query = query.eq("fecha_pago", fecha_filtro)
+            
+        pagos_resp = query.execute()
+        registros_pagos = pagos_resp.data or []
+
+        # 4. ORDENAR LOS REGISTROS DE MENOR A MAYOR POR NÚMERO DE ESCRITURA
+        def clave_orden_escritura(item):
+            esc_str = str(item.get("escritura", "")).strip()
+            solo_numeros = ''.join(c for c in esc_str if c.isdigit())
+            return int(solo_numeros) if solo_numeros else 0
+
+        registros_pagos.sort(key=clave_orden_escritura)
+
+        # 5. Consultar tabla liq para NIR y datos adicionales
+        result_liq = db.table('liq').select('escritura, nir, responsable').execute()
+
+        mapa_liq = {}
+        if result_liq.data:
+            for item in result_liq.data:
+                esc_k = str(normalizar_escritura(item.get("escritura"))).strip()
+                if esc_k:
+                    mapa_liq[esc_k] = item
+
+        # Acumuladores de totales
+        tot_ben = 0.0
+        tot_reg = 0.0
+        tot_recibo = 0.0
+        tot_pago_cli = 0.0
+        tot_faltante = 0.0
+        tot_sobrante = 0.0
+
+        filas_html = ""
+
+        # 6. Generar filas HTML ya ordenadas
+        for item in registros_pagos:
+            esc_raw = item.get("escritura")
+            esc = str(normalizar_escritura(esc_raw)).strip()
+
+            datos_acta = mapa_actas.get(esc, {})
+            datos_liq = mapa_liq.get(esc, {})
+
+            # Responsable, Liquidación y NIR
+            resp = item.get("responsable") or datos_liq.get("responsable") or "Venta"
+            liq_val = str(item.get("liquidacion") or "").strip()
+            nir_val = str(datos_liq.get("nir") or "").strip()        
+
+            # Cadena de números de actas
+            actas_list = datos_acta.get("actas", [])
+            actas_str = "-".join(actas_list) if actas_list else str(item.get("actas") or "")
+
+            # Contribuyente y Cédula/NIT
+            contrib = str(datos_acta.get("cliente") or "").strip()
+            doc_raw = str(datos_acta.get("documento") or item.get("documento") or "").strip()
+            identif = re.sub(r'[^0-9]', '', doc_raw) if ("C.C." in doc_raw or "N.I.T." in doc_raw) else doc_raw
+
+            # Montos
+            vr_ben = float(item.get("vr_ben") or 0)
+            vr_reg = float(item.get("vr_reg") or 0)
+            total_recibo = vr_ben + vr_reg
+
+            # PAGO CLIENTE = Suma total de las actas de esta escritura
+            pago_cli = datos_acta.get("pago_cli", 0.0)
+
+            # Faltante / Sobrante
+            faltante = max(total_recibo - pago_cli, 0.0)
+            sobrante = max(pago_cli - total_recibo, 0.0)
+
+            # Acumular globales
+            tot_ben += vr_ben
+            tot_reg += vr_reg
+            tot_recibo += total_recibo
+            tot_pago_cli += pago_cli
+            tot_faltante += faltante
+            tot_sobrante += sobrante
+
+            filas_html += f"""
+            <tr>
+                <td class="center">{esc_raw or esc}</td>
+                <td class="center">{resp}</td>
+                <td class="center">{liq_val}</td>
+                <td class="center">{nir_val}</td>
+                <td class="center">{actas_str}</td>
+                <td class="right">$ {vr_ben:,.0f}</td>
+                <td class="right">$ {vr_reg:,.0f}</td>
+                <td class="right font-bold">$ {total_recibo:,.0f}</td>
+                <td class="right font-bold">$ {pago_cli:,.0f}</td>
+                <td class="right text-red">{f'$ {faltante:,.0f}' if faltante > 0 else '-'}</td>
+                <td class="right text-green">{f'$ {sobrante:,.0f}' if sobrante > 0 else '-'}</td>
+                <td class="center">{contrib}</td>
+                <td class="center">{identif}</td>
+            </tr>
+            """
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Informe General de Pagos</title>
+            <style>
+                @page {{ size: landscape; margin: 8mm; }}
+                body {{ font-family: Arial, sans-serif; font-size: 11px; margin: 0; padding: 10px; background-color: #fff; }}
+                .header-container {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; position: relative; }}
+                .header-logo img {{ max-height: 80px; width: auto; }}
+                .no-print {{ margin-bottom: 15px; text-align: right; }}
+                .btn-print {{ background: #1e293b; color: #fff; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }}
+                .kpi-table {{ width: 100%; border-collapse: collapse; margin-bottom: 8px; }}
+                .kpi-table td {{ border: 1px solid #000; padding: 6px 4px; text-align: center; font-weight: bold; font-size: 12px; }}
+                .kpi-date {{ background-color: #e5e7eb; font-size: 13px; }}
+                .kpi-green {{ background-color: #dcfce7; font-size: 13px; }}
+                .kpi-title {{ font-size: 22px; font-style: italic; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; }}
+                .main-table {{ width: 100%; border-collapse: collapse; font-size: 10.5px; }}
+                .main-table th {{ background-color: #e5e7eb; color: #000; border: 1px solid #000; padding: 5px 3px; font-weight: bold; text-align: center; white-space: nowrap; }}
+                .main-table td {{ border: 1px solid #71717a; padding: 4px 5px; white-space: nowrap; }}
+                .main-table tfoot td {{ background-color: #f3f4f6; border: 1px solid #000; border-top: 2px solid #000; border-bottom: 3px double #000; font-weight: bold; padding: 6px 5px; }}
+                .center {{ text-align: center; }}
+                .right {{ text-align: right; }}
+                .font-bold {{ font-weight: bold; }}
+                .text-red {{ color: #dc2626; }}
+                .text-green {{ color: #16a34a; }}
+                @media print {{ .no-print {{ display: none; }} }}
+            </style>
+        </head>
+        <body>
+            <div class="no-print">
+                <button class="btn-print" onclick="window.print()">🖨️ Generar</button>                
+            </div>
+            <div class="header-container">
+                <div class="header-logo" style="flex: 1; text-align: left;">
+                    <img src="/static/logo.jpg" alt="Logo Notaría" />
+                </div>
+                <div  style="flex: 2; text-align: center; margin: 0;">
+                    <span style="font-size: 26px; display: block;">INFORME GENERAL DE PAGOS</span>
+                </div>
+                <div style="flex: 1; text-align: right; margin: 0;">
+                    <span style="font-size: 22px; display: inline-block; padding: 4px 12px; background: #e5e7eb; border-radius: 4px;">
+                        {fecha_mostrar}
+                    </span>
+                </div>                               
+            </div>
+            <table class="main-table">
+                <thead>
+                    <tr>
+                        <th>Escritura</th>
+                        <th>Responsable</th>
+                        <th>Liquidación</th>
+                        <th>NIR</th>
+                        <th>Actas</th>
+                        <th>Vr_Ben</th>
+                        <th>Vr_Reg</th>
+                        <th>Total Recibo</th>
+                        <th>Pago_Cli</th>
+                        <th>Faltante</th>
+                        <th>Sobrante</th>
+                        <th>Cliente</th>
+                        <th>Documento</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {filas_html}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="5" class="left font-bold">TOTALES / SUMA:</td>
+                        <td class="right font-bold">$ {tot_ben:,.0f}</td>
+                        <td class="right font-bold">$ {tot_reg:,.0f}</td>
+                        <td class="right font-bold">$ {tot_recibo:,.0f}</td>
+                        <td class="right font-bold">$ {tot_pago_cli:,.0f}</td>
+                        <td class="right font-bold text-red">$ {tot_faltante:,.0f}</td>
+                        <td class="right font-bold text-green">$ {tot_sobrante:,.0f}</td>
+                        <td colspan="2"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content)    
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    
+def normalizar_escritura(esc):
+    """Limpia la escritura removiendo caracteres no numéricos y ceros a la izquierda."""
+    if esc is None:
+        return ""
+    val = re.sub(r'\D', '', str(esc))
+    return val.lstrip('0') if val else ""
+
 @app.get("/api/liq/all")
-def liq_all(limit: int = 10000, page: int = 1, sort_by: str = 'updated_at', desc: bool = True):
+def liq_all(limit: int = 1000, page: int = 1, sort_by: str = 'updated_at', desc: bool = True):
     try:
         if not get_supabase():
             raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
         # Limitar el tamaño de página para evitar rangos excesivos en Supabase.
         max_limit = min(max(limit, 1), 10000)
         res = get_all_liq(limit=max_limit, page=max(page, 1), sort_by=sort_by, desc=desc)
-        return res.data
+        return res.data if hasattr(res, "data") else res
     except Exception as e:
         insert_log("consulta_liq_all", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    favicon_path = os.path.join(STATIC_DIR, "favicon.ico")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path)
+    return Response(status_code=204)
+
+def _format_date_string(value: Any) -> Any:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+
+    # dd/mm/yyyy or dd/mm/yy
+    m = re.match(r'^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$', s)
+    if m:
+        day, month, year = m.groups()
+        year = year if len(year) == 4 else f"20{year}"
+        try:
+            return datetime(int(year), int(month), int(day)).strftime('%d/%m/%y')
+        except ValueError:
+            pass
+
+    # yyyy-mm-dd or iso datetime
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt.strftime('%d/%m/%y')
+    except Exception:
+        pass
+
+    return s
+
+def _normalize_date_fields(body: dict) -> dict:
+    for field in ['fecha_proceso', 'fecha_pago', 'fecha_acta']:
+        if field in body and body[field] is not None:
+            body[field] = _format_date_string(body[field])
+    return body
 
 @app.post("/api/liq")
 def create_liq_row(body: dict):
     try:
         if not get_supabase():
             raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        body = _normalize_date_fields(body)
         result = insert_liq_row(body)
-        return {"status": "ok", "inserted": result.data}
+        data = result.data if hasattr(result, "data") else result
+        return {"status": "ok", "inserted": data}
     except Exception as e:
         insert_log("insert_liq", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -373,8 +993,10 @@ def patch_liq_row(escritura: str, body: dict):
     try:
         if not get_supabase():
             raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
+        body = _normalize_date_fields(body)
         result = update_liq_row(escritura, body)
-        return {"status": "ok", "updated": result.data}
+        data = result.data if hasattr(result, "data") else result
+        return {"status": "ok", "updated": data}
     except Exception as e:
         insert_log("update_liq", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -385,7 +1007,7 @@ def liq_processed(limit: int = 10000, page: int = 1, sort_by: str = 'fecha_proce
         if not get_supabase():
             raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
         res = get_processed_liq(limit=limit, page=page, sort_by=sort_by, desc=desc)
-        return res.data
+        return res.data if hasattr(res, "data") else res
     except Exception as e:
         insert_log("consulta_liq_processed", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -400,7 +1022,7 @@ def liq_table(table_name: str, limit: int = 1000, page: int = 1, sort_by: str = 
         if not get_supabase():
             raise HTTPException(status_code=503, detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env")
         res = get_table_rows(table_name, limit=limit, page=page, sort_by=sort_by, desc=desc)
-        return res.data
+        return res.data if hasattr(res, "data") else res
     except HTTPException:
         raise
     except Exception as e:
@@ -411,7 +1033,8 @@ def liq_table(table_name: str, limit: int = 1000, page: int = 1, sort_by: str = 
 def mark_escritura(escritura: str, estado: str, activity_type: str = None):
     try:
         res = update_liq_estado_by_escritura(escritura, estado, activity_type=activity_type)
-        return {"status": "ok", "updated": res.data}
+        data = res.data if hasattr(res, "data") else res
+        return {"status": "ok", "updated": data}
     except Exception as e:
         insert_log("update_liq", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -459,8 +1082,6 @@ def obtener_certificado(cert_id: str):
         insert_log("consulta_certificado", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- agrega estas funciones/endpoint a tu app.py ---
-
 def _run_envio_recibos_job(job_id: str):
     try:
         JOBS[job_id]["status"] = "running"
@@ -470,8 +1091,7 @@ def _run_envio_recibos_job(job_id: str):
         JOBS[job_id]["status"] = "done"
     except Exception as e:
         JOBS[job_id]["status"] = "error"
-        _append(job_id, f"[EXCEPTION] {type(e).__name__}: {e}")
-
+   
 @app.post("/api/envios/recibos/start")
 def start_envio_recibos():
     job_id = str(uuid.uuid4())
@@ -537,45 +1157,6 @@ def start_envio_certificados():
     job_id = str(uuid.uuid4())
     JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
     t = threading.Thread(target=_run_envio_certificados_job, args=(job_id,), daemon=True)
-    t.start()
-    return {"job_id": job_id}
-
-@app.post("/api/envios/certificados/unico/start")
-def start_envio_certificado_unico(body: dict):
-    if not isinstance(body, dict) or not body.get("escritura"):
-        raise HTTPException(status_code=400, detail="Escritura es obligatoria")
-
-    job_id = str(uuid.uuid4())
-    JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
-
-    def _run_unico(job_id, payload):
-        try:
-            JOBS[job_id]["status"] = "running"
-            import json, tempfile
-            tf = tempfile.NamedTemporaryFile(delete=False, suffix=".json", dir=APP_DIR, mode='w', encoding='utf-8')
-            json.dump(payload, tf, ensure_ascii=False)
-            tf.close()
-
-            script_path = os.path.join(APP_DIR, "envio_certificados.py")
-            proc = subprocess.Popen(
-                [sys.executable, script_path, "--single", tf.name],
-                cwd=APP_DIR,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            for line in proc.stdout:
-                _append(job_id, line)
-
-            proc.wait()
-            JOBS[job_id]["returncode"] = proc.returncode
-            JOBS[job_id]["status"] = "done" if proc.returncode == 0 else "error"
-        except Exception as e:
-            JOBS[job_id]["status"] = "error"
-            _append(job_id, f"[EXCEPTION] {type(e).__name__}: {e}")
-
-    t = threading.Thread(target=_run_unico, args=(job_id, body), daemon=True)
     t.start()
     return {"job_id": job_id}
 
@@ -665,7 +1246,6 @@ async def import_excel_file(file: UploadFile = File(...), table: str = "liq"):
     except Exception as e:
         insert_log("import_excel_error", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=f"Error al procesar archivo: {str(e)}")
-
 # ========================
 # NUEVOS ENDPOINTS PARA DESCARGAS Y ENVÍOS
 # ========================
@@ -944,4 +1524,3 @@ def download_liq_backup():
     except Exception as e:
         insert_log('download_liq_error', str(e), 'sistema', 'error')
         raise HTTPException(status_code=500, detail=str(e))
-    
