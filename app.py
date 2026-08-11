@@ -9,6 +9,7 @@ import base64
 import smtplib
 from email.message import EmailMessage
 import pandas as pd
+import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -252,18 +253,26 @@ def home():
     with open(HTML_FILE, "r", encoding="utf-8") as f:
         return f.read()
 
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "notaria"}
+
 @app.post("/api/descargas/certificados/start")
 def start_descarga_certificados():
     job_id = str(uuid.uuid4())
     JOBS[job_id] = {"status": "queued", "logs": [], "returncode": None}
     t = threading.Thread(target=_run_certificados_job, args=(job_id,), daemon=True)
     t.start()
-    # Registrar inicio en logs (si supabase no está configurado, se imprimirá)
+
     try:
         insert_log("descarga_certificados", f"Job iniciado: {job_id}", "sistema")
     except Exception:
         pass
     return {"job_id": job_id}
+
+
+if __name__ == "__main__":
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):

@@ -8,3 +8,5 @@ httpx
 supabase
 python-dotenv
 python-multipart
+playwright
+pytest
