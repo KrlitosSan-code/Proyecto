@@ -429,7 +429,7 @@ def get_pagos_2026_resumen(anio: int = 2026) -> list:
 
             filas.append({
                 'escritura': esc,
-                'nir': pago.get('nir'),
+                'liquidacion': pago.get('liquidacion'),
                 'responsable': pago.get('responsable'),
                 'vr_ben': vr_ben,
                 'vr_reg': vr_reg,
@@ -451,7 +451,7 @@ def get_pagos_2026_resumen(anio: int = 2026) -> list:
 
 def upsert_pago_2026(escritura, vr_ben: float = None, vr_reg: float = None,
                       fecha_pago: str = None, observaciones: str = None,
-                      nir: str = None, responsable: str = None) -> Any:
+                      liquidacion: str = None, responsable: str = None) -> Any:
     """Crea o actualiza los valores manuales (Vr_Ben, Vr_Reg, fecha proyectada de pago) de una escritura."""
     db = get_supabase()
     if not db:
@@ -463,7 +463,7 @@ def upsert_pago_2026(escritura, vr_ben: float = None, vr_reg: float = None,
         if vr_reg is not None: payload['vr_reg'] = vr_reg
         if fecha_pago is not None: payload['fecha_pago'] = fecha_pago
         if observaciones is not None: payload['observaciones'] = observaciones
-        if nir is not None: payload['nir'] = nir
+        if liquidacion is not None: payload['liquidacion'] = liquidacion
         if responsable is not None: payload['responsable'] = responsable
 
         response = db.table('pagos_2026').upsert(payload, on_conflict='escritura').execute()

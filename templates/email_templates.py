@@ -6,7 +6,8 @@ def asunto_certificado(
 def cargar_cuerpo_certificado(
     escritura
 ):
-    return f"""Estimado/a usuario/a,
+    return f"""
+    Estimado/a usuario/a,
 
 Me dirijo a usted para informarle que se adjunta a la presente comunicación el Certificado de Tradición y Libertad, correspondiente a la escritura {escritura}. Con la expedición de este documento, 
 
@@ -43,11 +44,13 @@ def asunto_recibo(
     return f"Proceso de registro Escritura {escritura} - Nir: {nir}"
 
 def cargar_cuerpo_recibo(
-    escritura
+    escritura,
+    nir,
+    gob
 ):
     return f"""Estimado(a) usuario(a),
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de Cundinamarca.
+De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de {gob}.
 
 ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: {escritura}
 
@@ -56,9 +59,9 @@ Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, p
 ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
 ​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de Cundinamarca. Puede hacerlo de dos formas:
+Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de {gob}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://gevir.cundinamarca.gov.co/consultas.php (https://gevir.cundinamarca.gov.co/consultas.php). Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+​- En línea: A través de https://gevir.cundinamarca.gov.co/consultas.php . Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
 - Presencial: En los bancos autorizados con el recibo adjunto.
 
 2. Notificación y Segundo Pago (Derechos de Registro)
@@ -77,7 +80,7 @@ Formato de búsqueda: Al digitar el número en el portal de la Gobernación, deb
 Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
 En línea: Puede realizar el pago a través del portal de Trámites de Cundinamarca en el siguiente enlace: https://gevir.cundinamarca.gov.co/consultas.php, utilizando el número de liquidación mencionado.
-Presencial: Si prefiere realizar el pago de manera presencial, puede dirigirse a cualquier oficina de la Gobernación de Cundinamarca o a los bancos autorizados, presentando el recibo adjunto en el banco correspondiente.
+Presencial: Si prefiere realizar el pago de manera presencial, puede dirigirse a cualquier oficina de la Gobernación de {gob} o a los bancos autorizados, presentando el recibo adjunto en el banco correspondiente.
 
 Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 

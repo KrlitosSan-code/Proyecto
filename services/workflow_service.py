@@ -128,8 +128,7 @@ class WorkflowService:
                         mensaje=str(e)
                     )
                     print(f"ERROR {escritura} -> {e}")             
-                    print("PAGINAS:", len(self.browser.context.pages))
-
+            print("EJECUCION CERTIFICADOS FINALIZADA")
         finally:
             self.browser.close()   
         
@@ -170,7 +169,7 @@ class WorkflowService:
                         mensaje=str(e)
                     )
                     print(f"ERROR {row['escritura']} -> {e}")
-                print('Envio de recibos finalizado')
+            print('Envio de recibos finalizado')
         finally:
             self.browser.close()
 

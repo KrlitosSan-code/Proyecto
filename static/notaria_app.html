@@ -145,7 +145,7 @@
         </div>
       </div>
 
-      <!-- Tabla rÃ¡pida pendientes -->
+      <!-- Tabla rapida pendientes -->
       <div class="mt-16">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
           <div>
@@ -173,6 +173,30 @@
         </div>
       </div>
     </div>
+
+    <div class="table-toolbar">
+      <!-- Buscador en tiempo real -->
+      <input 
+          type="text" 
+          id="input-busqueda-global" 
+          placeholder="🔍 Buscar por Escritura, NIR, Cliente, Cédula..." 
+          style="flex: 1; min-width: 250px;"
+          oninput="filtrarTabla()"
+      >
+
+      <!-- Selector rápido por Estado -->
+      <select id="select-filtro-estado" onchange="filtrarTabla()">
+          <option value="">Todos los estados</option>
+          <option value="pendiente">🟡 Registro Pendiente / Procesar</option>
+          <option value="pagado">🟢 Pagado / Completado</option>
+          <option value="error">🔴 Error / Faltante</option>
+      </select>
+
+      <!-- Indicador de cantidad de filas -->
+      <span id="tabla-contador" style="font-size: 13px; color: #64748b; font-weight: 500;">
+          Mostrando 0 registros
+      </span>
+  </div>
 
     <!-- REGISTROS -->
     <div id="view-registros" class="view fade-in">
@@ -735,7 +759,7 @@
       <div class="form-grid">
         <div class="form-group">
           <label class="form-label">Liquidación</label>
-          <input class="form-input" id="pago2026-nir" type="text" placeholder="Número de liquidación">
+          <input class="form-input" id="pago2026-liquidacion" type="text" placeholder="Número de liquidación">
         </div>
         <div class="form-group">
           <label class="form-label">Beneficencia (a pagar)</label>
@@ -791,6 +815,30 @@
   </div>
 </div>
 
+<!-- Contenedor para mensajes flotantes -->
+<div id="toast-container"></div>
+
+<!-- Modal / Bar de Monitoreo de Jobs en Ejecución -->
+<div id="job-status-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 600px;">
+        <h3>⚙️ Proceso en Ejecución</h3>
+        <p id="job-status-title">Procesando solicitud...</p>
+        
+        <!-- Barra de Progreso Indeterminada / Visual -->
+        <div style="width: 100%; background: #e5e7eb; height: 10px; border-radius: 5px; overflow: hidden; margin: 15px 0;">
+            <div id="job-progress-bar" style="width: 30%; background: #3b82f6; height: 100%; transition: width 0.4s ease;"></div>
+        </div>
+
+        <div style="background: #1e293b; color: #10b981; padding: 10px; font-family: monospace; height: 150px; overflow-y: auto; border-radius: 4px;" id="job-logs-console">
+            > Iniciando tarea...
+        </div>
+
+        <div style="margin-top: 15px; text-align: right;">
+            <button id="btn-close-job-modal" onclick="AppUI.closeJobModal()" style="display: none;">Cerrar</button>
+        </div>
+    </div>
+</div>
+
 <!-- NOTIFICATIONS -->
 <div class="notif-container" id="notif-container"></div>
 
@@ -799,6 +847,129 @@ function closeSidebarOnMobile() {
   if (window.innerWidth <= 700) {
     document.body.classList.add('sidebar-hidden');
   }
+}
+
+// ==========================================
+// MÓDULO UI: TOASTS Y NOTIFICACIONES
+// ==========================================
+const AppUI = {
+    showToast(message, type = 'info', duration = 4000) {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        
+        toast.innerHTML = `
+            <span>${message}</span>
+            <span style="cursor:pointer; margin-left:12px; font-weight:bold;" onclick="this.parentElement.remove()">&times;</span>
+        `;
+        
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            if (toast.parentElement) {
+                toast.remove();
+            }
+        }, duration);
+    },
+
+    setButtonLoading(buttonEl, isLoading) {
+        if (!buttonEl) return;
+        if (isLoading) {
+            buttonEl.classList.add('btn-loading');
+            buttonEl.disabled = true;
+        } else {
+            buttonEl.classList.remove('btn-loading');
+            buttonEl.disabled = false;
+        }
+    },
+
+    openJobModal(title) {
+        document.getElementById('job-status-title').innerText = title;
+        document.getElementById('job-logs-console').innerText = '> Conectando con el servidor...';
+        document.getElementById('job-progress-bar').style.width = '10%';
+        document.getElementById('btn-close-job-modal').style.display = 'none';
+        document.getElementById('job-status-modal').style.display = 'block';
+    },
+
+    closeJobModal() {
+        document.getElementById('job-status-modal').style.display = 'none';
+    }
+};
+
+// ==========================================
+// MÓDULO JOB MANAGER: MONITOREO DE TAREAS
+// ==========================================
+const JobManager = {
+    activeInterval: null,
+
+    trackJob(jobId, onComplete = null) {
+        AppUI.openJobModal(`Ejecutando Tarea: ${jobId.substring(0, 8)}...`);
+        
+        if (this.activeInterval) clearInterval(this.activeInterval);
+
+        this.activeInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                if (!response.ok) throw new Error('No se pudo consultar el estado del proceso');
+                
+                const data = await response.json();
+                const consoleEl = document.getElementById('job-logs-console');
+                const progressBar = document.getElementById('job-progress-bar');
+
+                // Actualizar Logs
+                if (data.logs && data.logs.length > 0) {
+                    consoleEl.innerText = data.logs.join('\n');
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                }
+
+                // Manejo de Estados
+                if (data.status === 'running') {
+                    progressBar.style.width = '60%';
+                } else if (data.status === 'done') {
+                    clearInterval(this.activeInterval);
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = '#10b981';
+                    AppUI.showToast('¡Proceso finalizado con éxito!', 'success');
+                    document.getElementById('btn-close-job-modal').style.display = 'inline-block';
+                    if (onComplete) onComplete(data);
+                } else if (data.status === 'error') {
+                    clearInterval(this.activeInterval);
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = '#ef4444';
+                    AppUI.showToast('El proceso terminó con errores.', 'error');
+                    document.getElementById('btn-close-job-modal').style.display = 'inline-block';
+                }
+            } catch (err) {
+                console.error(err);
+                clearInterval(this.activeInterval);
+                AppUI.showToast(`Error al monitorear: ${err.message}`, 'error');
+            }
+        }, 1500); // Polling cada 1.5s
+    }
+};
+
+// ==========================================
+// EJEMPLO DE USO EN DISPARADORES DE EVENTOS
+// ==========================================
+
+// Ejemplo: Iniciar Descarga de Certificados
+async function triggerDescargaCertificados(btnElement) {
+    try {
+        AppUI.setButtonLoading(btnElement, true);
+        const res = await fetch('/api/descargas/certificados/start', { method: 'POST' });
+        const data = await res.json();
+        
+        if (data.job_id) {
+            JobManager.trackJob(data.job_id, () => {
+                // Callback al completar: Recargar tablas o datos
+                if (typeof cargarTablaLiquidaciones === 'function') cargarTablaLiquidaciones();
+            });
+        }
+    } catch (e) {
+        AppUI.showToast(`Error: ${e.message}`, 'error');
+    } finally {
+        AppUI.setButtonLoading(btnElement, false);
+    }
 }
 
 // ================================================================
@@ -820,6 +991,11 @@ const PAGINATION_STATE = {
   liq2026: { page: 1, pageSize: 30 },
   pagos2026: { page: 1, pageSize: 30 },
 };
+
+let estadoTabla = {
+  datosOriginales: [],
+  datosFiltrados: [],
+}
 
 let TABLE_COUNTS = { liq: 0, liq_2025: 0, liq_2026: 0 };
 let TABLE_CACHE = { liq_2025: [], liq_2026: [] };
@@ -988,6 +1164,57 @@ function normalizarEscritura(val) {
   return val_str;
 }
 
+function normalizarTexto(valor){
+  if (valor === null || valor === undefined) return '';
+  return valor
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function filtrarTabla(){
+  const inputBusqueda = document.getElementById('input-busqueda-global');
+  const selectEstado = document.getElementById('select-filtro-estado');
+  const queryBusqueda = normalizarTexto(inputBusqueda ? inputBusqueda.value : '');
+  const estadoFiltro = normalizarTexto(selectEstado ? selectEstado.value : '');
+
+  estadoTabla.datosFiltrados = estadoTabla.datosOriginales.filter(item =>{
+    const escritura = normalizarTexto(item.escritura || item.num_escritura);
+    const nir = normalizarTexto(item.nir);
+    const cliente = normalizarTexto(item.cliente || item.nombre_cliente);
+    const correo = normalizarTexto(item.correo || item.correo_cliente);
+    const estado_ctl = normalizarTexto(item.estado_ctl);
+
+    const coincideTexto = !queryBusqueda || 
+            escritura.includes(queryBusqueda) ||
+            nir.includes(queryBusqueda) ||
+            cliente.includes(queryBusqueda) ||
+            correo.includes(queryBusqueda);
+
+        // 2. Coincidencia por Filtro de Estado Especifico
+        const coincideEstado = !estadoFiltro || estado_ctl.includes(estadoFiltro);
+
+        return coincideTexto && coincideEstado;
+  })
+  renderizarTabla(estadoTabla.datosFiltrados);
+}
+
+function obtenerBadgeEstado(estado){
+  const est = normalizarTexto(estado);
+
+  if (est.includes('pendiente') || est.includes('procesar')){
+    return `<span class="badge badge-warning">🟡 ${estado}</span>`;
+    } else if (est.includes('pagado') || est.includes('completado') || est.includes('exitoso')) {
+        return `<span class="badge badge-success">🟢 ${estado}</span>`;
+    } else if (est.includes('error') || est.includes('faltante') || est.includes('rechazado')) {
+        return `<span class="badge badge-danger">🔴 ${estado}</span>`;
+    } else {
+        return `<span class="badge badge-secondary">⚪ ${estado || 'N/A'}</span>`;
+    }
+}
+
 function capFirst(text) {
   if (text === null || text === undefined) return '';
   text = String(text);
@@ -1083,335 +1310,335 @@ const PLANTILLAS_RECIBO = {
     asunto: (e, n) => `Proceso de registro Escritura ${e} - Nir ${n}`,
     cuerpo: (e, n, g) => `Estimado(a) usuario(a),
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://gevir.cundinamarca.gov.co/consultas.php. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://gevir.cundinamarca.gov.co/consultas.php. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.
-`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.
+    `
   },
   bolivar: {
     asunto: (e, n, g) => `Escritura ${e} NIR ${n} - Recibo Gobernación de ${g}`,
     cuerpo: (e, n, g) => `Estimado(a) cliente,
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://impuestos.bolivar.gov.co/gobol_web/pagos-recibos. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://impuestos.bolivar.gov.co/gobol_web/pagos-recibos. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.
-`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.
+    `
   },
   tolima: {
     asunto: (e, n, g) => `Escritura ${e} NIR ${n} - Recibo Gobernaciónn del ${g}`,
     cuerpo: (e, n, g) => `Estimado(a) cliente,
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://aplicativosenlinea.net/siverrtolima2/pagoweb/consulta_boleta_contri.php. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://aplicativosenlinea.net/siverrtolima2/pagoweb/consulta_boleta_contri.php. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
   },
   boyaca: {
     asunto: (e, n, g) => `Escritura ${e} NIR ${n} - Recibo Gobernaciónn del ${g}`,
     cuerpo: (e, n, g) => `Estimado(a) cliente,
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://gestionaonline.co/siverrboyaca/pagoweb/consulta_boleta_contri.php. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://gestionaonline.co/siverrboyaca/pagoweb/consulta_boleta_contri.php. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
   },
   santander: {
     asunto: (e, n, g) => `Escritura ${e} NIR ${n} - Recibo Gobernaciónn del ${g}`,
     cuerpo: (e, n, g) => `Estimado(a) cliente,
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://registro.syc.com.co/. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://registro.syc.com.co/. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
   },
   atlantico: {
     asunto: (e, n, g) => `Escritura ${e} NIR ${n} - Recibo Gobernaciónn del ${g}`,
     cuerpo: (e, n, g) => `Estimado(a) cliente,
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://www.abcpagos.com/vur_atlantico/busqueda_pin. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://www.abcpagos.com/vur_atlantico/busqueda_pin. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
   },
   antioquia: {
     asunto: (e, n, g) => `Escritura ${e} NIR ${n} - Recibo Gobernaciónn del ${g}`,
     cuerpo: (e, n, g) => `Estimado(a) cliente,
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo presencial: En los bancos autorizados con el recibo adjunto.
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
-Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    Formato de búsqueda: Al digitar el número en el portal de la Gobernación, debe omitir los ceros iniciales. (Ejemplo: Si el número es 000012345, digite solo 12345).
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
   },
   magdalena: {
     asunto: (e, n) => `Proceso de registro Escritura ${e} - Nir ${n}`,
     cuerpo: (e, n, g) => `Estimado(a) usuario(a),
 
-De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
+    De manera atenta remitimos el recibo de pago correspondiente a la Escritura del asunto de la Gobernación de ${g}.
 
-⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
+    ⚠️ Información Importante: Plazos y Pagos de Registro de la escritura: ${e}
 
-Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
+    Para que el trámite de su escritura sea exitoso y evitar sobrecostos legales, por favor lea atentamente las siguientes condiciones de cumplimiento obligatorio:
 
-​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
+    ​El motivo de este correo es informarle sobre el procedimiento obligatorio para el registro de su escritura. Con el fin de asegurar el éxito de su trámite y evitar intereses de mora o sanciones, es fundamental que comprenda que el proceso consta de dos pagos obligatorios que deben realizarse en orden consecutivo:
 
-​1. Primer Pago (Gobernación)
-Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
+    ​1. Primer Pago (Gobernación)
+    Debe realizar el pago correspondiente al Impuesto de Registro ante la Gobernación de ${g}. Puede hacerlo de dos formas:
 
-​- En línea: A través de https://impuestos.gobernaciondelmagdalena.gov.co/pse-autoservicio-ref. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
-- Presencial: En los bancos autorizados con el recibo adjunto.
+    ​- En línea: A través de https://impuestos.gobernaciondelmagdalena.gov.co/pse-autoservicio-ref. Al ingresar el número de liquidación (ubicado en la parte superior derecha del recibo adjunto), debe omitir los ceros iniciales.
+    - Presencial: En los bancos autorizados con el recibo adjunto.
 
-2. Notificación y Segundo Pago (Derechos de Registro)
-Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
+    2. Notificación y Segundo Pago (Derechos de Registro)
+    Una vez que haya realizado el pago del paso anterior, es indispensable que nos envíe el comprobante de pago inmediatamente respondiendo a este correo o comunicándose al 601 8088139 ext. 106. Solo tras recibir esta notificación, podremos expedir y enviarle el segundo recibo correspondiente a los Derechos de Registro (Vur / Notariado). El trámite no se iniciará hasta que se completen ambos pagos.
 
-Información Importante sobre Plazos:
-Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
+    Información Importante sobre Plazos:
+    Le recordamos que cuenta con un plazo máximo de dos (2) meses calendario, contados a partir de la fecha de la firma de la escritura, para radicar el documento. El tiempo corre desde la firma en la Notaría, no desde la generación de los recibos.
 
-3. Instrucciones para la Liquidación y Pago:
-Para consultar el estado de su liquidación o realizar el pago en línea:
-Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
+    3. Instrucciones para la Liquidación y Pago:
+    Para consultar el estado de su liquidación o realizar el pago en línea:
+    Número de Liquidación: Lo encontrará en la parte superior derecha de su recibo.
 
-¿Por qué esto es vital?
+    ¿Por qué esto es vital?
 
-Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
+    Muchos usuarios asumen que el plazo comienza cuando reciben el recibo, pero la ley es clara: el tiempo corre desde que se firmó la escritura en la Notaría. Le recomendamos realizar ambos pagos de manera inmediata para evitar que el sistema bloquee el trámite por extemporaneidad.
 
-Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
+    Le solicitamos validar que toda la información en la liquidación sea correcta. En caso de encontrar alguna inconsistencia, por favor contáctenos inmediatamente antes de efectuar el pago.
 
-Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
+    Agradecemos su atención a estas instrucciones para garantizar la agilidad de su trámite.
 
-Cordialmente,
+    Cordialmente,
 
-Beneficencia y Registro
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
+    Beneficencia y Registro
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C.`
   }
 };
 
@@ -1420,30 +1647,30 @@ const PLANTILLAS_CERTIFICADO = {
     asunto: (e, n) => `Escritura ${e} NIR ${n} - Certificado de Tradición y Libertad`,
     cuerpo: (e, n) => `Estimado/a usuario/a,
 
-Me dirijo a usted para informarle que se adjunta a la presente comunicación el Certificado de Tradición y Libertad de la escritura ${e}. Con la expedición de este documento, se da por terminada formalmente la gestión de su escritura con nosotros.
+    Me dirijo a usted para informarle que se adjunta a la presente comunicación el Certificado de Tradición y Libertad de la escritura ${e}. Con la expedición de este documento, se da por terminada formalmente la gestión de su escritura con nosotros.
 
-Es de suma importancia que realice una revisión exhaustiva del contenido del certificado, validando que todos los datos coincidan exactamente con la escritura pública firmada.
+    Es de suma importancia que realice una revisión exhaustiva del contenido del certificado, validando que todos los datos coincidan exactamente con la escritura pública firmada.
 
-Protocolo de subsanación de inconsistencias:
+    Protocolo de subsanación de inconsistencias:
 
-* Errores de Registro: De encontrar inconsistencias, estas deberán subsanarse directamente ante la ORIP correspondiente, ya que ellos emiten el concepto y son los únicos facultados para modificar el documento.
+    * Errores de Registro: De encontrar inconsistencias, estas deberán subsanarse directamente ante la ORIP correspondiente, ya que ellos emiten el concepto y son los únicos facultados para modificar el documento.
 
-* Errores de Notaría: Si el error es por causa de la Notaría, deberá notificarnos de inmediato para revisar el caso y proceder con la subsanación correspondiente.
+    * Errores de Notaría: Si el error es por causa de la Notaría, deberá notificarnos de inmediato para revisar el caso y proceder con la subsanación correspondiente.
 
-Entrega de copias y Atención al Cliente: Las copias pueden ser reclamadas de manera presencial presentando la factura original o la cédula de ciudadanía de los intervinientes.
+    Entrega de copias y Atención al Cliente: Las copias pueden ser reclamadas de manera presencial presentando la factura original o la cédula de ciudadanía de los intervinientes.
 
-Contamos con un horario de atención de lunes a viernes, de 8:00 a.m. a 5:30 p.m. en jornada continua.
+    Contamos con un horario de atención de lunes a viernes, de 8:00 a.m. a 5:30 p.m. en jornada continua.
 
-Agradecemos la confianza depositada en nuestro despacho.
+    Agradecemos la confianza depositada en nuestro despacho.
 
-Cordialmente,
+    Cordialmente,
 
-Carlos Sanabria 
+    Carlos Sanabria 
 
-Beneficencia y Registro 
-NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C 
-Av. Caracas #70-75 
-correo: beneficenciayregistro@notaria48bogota.com`
+    Beneficencia y Registro 
+    NOTARÍA 48 DEL CÍRCULO DE BOGOTÁ D.C 
+    Av. Caracas #70-75 
+    correo: beneficenciayregistro@notaria48bogota.com`
   }
 };
 
@@ -1534,9 +1761,9 @@ async function procesarRegistro(reg) {
     para: reg.correo,
     adjuntos: docs.map(d => d.name)
   };
-  // Marcar como procesado
-  reg.estado_ctl = 'enviado';
-  reg.fecha_proceso = formatDateCO(new Date());
+  // Marcar como en proceso; el estado final se actualizará después del envío
+  reg.estado_ctl = 'procesando';
+  reg.fecha_proceso = null;
   return mail;
 }
 
@@ -1574,7 +1801,7 @@ async function enviarAProcesar(esc) {
   }
 
   reg.pago = 'ingresado';
-  reg.estado_ctl = 'procesando';
+  reg.estado_ctl = 'pendiente';
   reg.fecha_proceso = null;
 
   try {
@@ -2367,6 +2594,50 @@ async function procesarUno(esc) {
   showNotif(`Escritura ${escNorm} procesada correctamente`, 'success');
 }
 
+async function cargarDatosTabla() {
+    try {
+        const response = await fetch('/api/liq'); // O tu endpoint activo
+        const data = await response.json();
+
+        // Almacenar en el estado global
+        estadoTabla.datosOriginales = data;
+        
+        // Ejecutar filtro inicial
+        filtrarTabla();
+    } catch (error) {
+        AppUI.showToast(`Error al cargar datos: ${error.message}`, 'error');
+    }
+}
+
+function renderizarTabla(filas) {
+    const tbody = document.getElementById('tbody-principal');
+    const contador = document.getElementById('tabla-contador');
+    
+    if (contador) {
+        contador.innerText = `Mostrando ${filas.length} de ${estadoTabla.datosOriginales.length} registros`;
+    }
+
+    if (!tbody) return;
+
+    if (filas.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#94a3b8; padding:20px;">No se encontraron registros que coincidan con la búsqueda.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = filas.map(item => `
+        <tr>
+            <td><strong>${item.escritura || '-'}</strong></td>
+            <td>${item.nir || '-'}</td>
+            <td>${item.cliente || '-'}</td>
+            <td>${item.cedula || '-'}</td>
+            <td>${obtenerBadgeEstado(item.estado)}</td>
+            <td>
+                <!-- Botones de Acción -->
+                <button onclick="verDetalle('${item.id}')">👁️</button>
+            </td>
+        </tr>
+    `).join('');
+}
 // ================================================================
 // DETALLE / MODAL
 // ================================================================
@@ -2731,17 +3002,20 @@ function renombrarAsociadosEscritura(oldEsc, newEsc) {
     delete BORRADORES[oldKey];
   }
 }
+
 function getDocType(name) {
   const ext = name.split('.').pop().toLowerCase();
   if (ext==='pdf') return 'pdf';
   if (ext==='docx') return 'docx';
   return 'doc';
 }
+
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
   return (bytes/1048576).toFixed(1) + ' MB';
 }
+
 function asociarDocumento(file) {
   const name = file.name;
 
@@ -2823,6 +3097,7 @@ function handleDocDrop(e) {
   document.getElementById('doc-upload-area').classList.remove('drag-over');
   handleDocFiles(e.dataTransfer.files);
 }
+
 function quitarDoc(esc, name) {
   if (!DOCUMENTOS[esc]) return;
   DOCUMENTOS[esc] = DOCUMENTOS[esc].filter(d=>d.name!==name);
@@ -3043,7 +3318,7 @@ function renderPagos2026() {
   tbody.innerHTML = pageRows.map(r => `
     <tr>
       <td class="td-escritura">${r.escritura}</td>
-      <td>${r.nir || '-'}</td>
+      <td>${r.liquidacion || '-'}</td>
       <td>${formatCOP(r.vr_ben)}</td>
       <td>${formatCOP(r.vr_reg)}</td>
       <td>${formatCOP(r.total)}</td>
@@ -3185,7 +3460,7 @@ async function abrirDetallePago2026(escritura) {
   if (!fila) return;
 
   document.getElementById('pago2026-title').textContent = `Escritura ${escritura}`;
-  document.getElementById('pago2026-nir').value = fila.nir || '';
+  document.getElementById('pago2026-liquidacion').value = fila.liquidacion || '';
   document.getElementById('pago2026-vrben').value = fila.vr_ben || 0;
   document.getElementById('pago2026-vrreg').value = fila.vr_reg || 0;
   document.getElementById('pago2026-fecha').value = fila.fecha_pago || '';
@@ -3228,7 +3503,7 @@ async function abrirDetallePago2026(escritura) {
 async function guardarPago2026() {
   const escritura = Number(document.getElementById('pago2026-resumen').dataset.escritura);
   const payload = {
-    nir: document.getElementById('pago2026-nir').value.trim() || null,
+    liquidacion: document.getElementById('pago2026-liquidacion').value.trim() || null,
     vr_ben: Number(document.getElementById('pago2026-vrben').value) || 0,
     vr_reg: Number(document.getElementById('pago2026-vrreg').value) || 0,
     fecha_pago: document.getElementById('pago2026-fecha').value || null,

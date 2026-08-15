@@ -884,11 +884,105 @@
   .mt-16 { margin-top: 16px; }
   .mb-8 { margin-bottom: 8px; }
   .mb-12 { margin-bottom: 12px; }
+  /* Contenedor de la barra de herramientas de la tabla */
+.table-toolbar {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 15px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.table-toolbar input[type="text"],
+.table-toolbar select {
+    padding: 8px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.table-toolbar input[type="text"]:focus,
+.table-toolbar select:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+/* Badges de Estado */
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.badge-success { background-color: #d1fae5; color: #065f46; }
+.badge-warning { background-color: #fef3c7; color: #92400e; }
+.badge-danger { background-color: #fee2e2; color: #991b1b; }
+.badge-secondary { background-color: #f1f5f9; color: #475569; }
   
   @media (min-width: 900px) {
   body.sidebar-hidden .sidebar {
     width: 0;
     transform: none; 
+  }
+  /* Contenedor de Notificaciones Toast */
+  #toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+  }
+
+  .toast {
+      min-width: 280px;
+      padding: 12px 16px;
+      border-radius: 6px;
+      color: #fff;
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      animation: slideIn 0.3s ease-out;
+  }
+
+  .toast-success { background-color: #10b981; }
+  .toast-error { background-color: #ef4444; }
+  .toast-info { background-color: #3b82f6; }
+  .toast-warning { background-color: #f59e0b; }
+
+  @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+  }
+
+  /* Indicador de Estado para Botones */
+  .btn-loading {
+      position: relative;
+      pointer-events: none;
+      opacity: 0.7;
+  }
+
+  .btn-loading::after {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      margin-left: 8px;
+      border: 2px solid transparent;
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+      to { transform: rotate(360deg); }
   }
 }
 @media (max-width: 900px) {
@@ -905,3 +999,4 @@
     margin-left: 0;
   }
 }
+

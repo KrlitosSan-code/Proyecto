@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app import app
+from app import app, _format_date_string
 
 
 def test_liq_views_use_correct_business_rules():
@@ -26,6 +26,12 @@ def test_root_page_serves_html():
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
+
+
+def test_format_date_string_returns_postgres_iso_date():
+    assert _format_date_string("13/08/26") == "2026-08-13"
+    assert _format_date_string("13/08/2026") == "2026-08-13"
+    assert _format_date_string("2026-08-13") == "2026-08-13"
 
 
 def test_workflow_endpoints_trigger_expected_methods(monkeypatch):
