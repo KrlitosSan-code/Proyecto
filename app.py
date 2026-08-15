@@ -1,3 +1,6 @@
+import base64
+from datetime import datetime
+from email.message import EmailMessage
 import os
 import sys
 import uuid
@@ -25,6 +28,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
+from database.supabase_client import delete_acta, get_acta_by_id, get_actas_by_escritura, get_pagos_2026_resumen, get_supabase, import_pagos_from_rows, insert_acta, insert_log, update_acta, upsert_pago_2026
 from repositories.liq_repository import LiqRepository
 from services.workflow_service import WorkflowService
 load_dotenv()
@@ -69,6 +73,7 @@ except ImportError:
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
+HTML_FILE = os.path.join(STATIC_DIR, "notaria_app.html")
 SQL_SCHEMA_FILE = Path(APP_DIR, "supabase_schema_from_excel.sql")
 
 app = FastAPI(title="Sistema Notarial")
@@ -317,7 +322,7 @@ def start_descarga_certificados():
 
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False, access_log=False)
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
@@ -1225,15 +1230,13 @@ def pagos2026_resumen():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- agrega estas funciones/endpoint a tu app.py ---
-
 def _run_envio_recibos_job(job_id: str):
     try:
-        if not get_supabase():
-            raise HTTPException(status_code=503, detail="Supabase no configurado.")
-        return get_actas_by_escritura(escritura)
-    except HTTPException:
-        raise
+        JOBS[job_id]["status"] = "running"
+        workflow = WorkflowService()
+        workflow.ejecutar_recibos()
+        JOBS[job_id]["returncode"] = 0
+        JOBS[job_id]["status"] = "done"
     except Exception as e:
         JOBS[job_id]["status"] = "error"
         _append(job_id, f"[EXCEPTION] {type(e).__name__}: {e}")
@@ -1248,9 +1251,7 @@ def start_envio_recibos():
 
 @app.post("/api/envios/recibos/unico/start")
 def start_envio_recibo_unico(body: dict):
-    """Recibe un payload JSON para enviar un único recibo.
-    Crea un archivo temporal con el payload y lanza envio_recibos.py --single <file> en hilo.
-    """
+    """Recibe un payload JSON para enviar un único recibo."""
     if not isinstance(body, dict) or not body.get("escritura"):
         raise HTTPException(status_code=400, detail="Escritura es obligatoria")
 
@@ -1260,7 +1261,6 @@ def start_envio_recibo_unico(body: dict):
     def _run_unico(job_id, payload):
         try:
             JOBS[job_id]["status"] = "running"
-            # crear archivo temporal con payload
             import json, tempfile
             tf = tempfile.NamedTemporaryFile(delete=False, suffix=".json", dir=APP_DIR, mode='w', encoding='utf-8')
             json.dump(payload, tf, ensure_ascii=False)
@@ -1287,22 +1287,17 @@ def start_envio_recibo_unico(body: dict):
     t.start()
     return {"job_id": job_id}
 
+
 def _run_envio_certificados_job(job_id: str):
     try:
-        if not get_supabase():
-            raise HTTPException(status_code=503, detail="Supabase no configurado.")
-        response = get_acta_by_id(acta_id)
-        if not response:
-            raise HTTPException(status_code=404, detail="Acta no encontrada")
-        return response
-    except HTTPException:
-        raise
+        JOBS[job_id]["status"] = "running"
+        workflow = WorkflowService()
+        workflow.ejecutar_envio_certificados()
+        JOBS[job_id]["returncode"] = 0
+        JOBS[job_id]["status"] = "done"
     except Exception as e:
-        try:
-            insert_log("obtener_acta", str(e), "sistema", "error")
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=str(e))
+        JOBS[job_id]["status"] = "error"
+        _append(job_id, f"[EXCEPTION] {type(e).__name__}: {e}")
 
 @app.post("/api/envios/certificados/start")
 def start_envio_certificados():
