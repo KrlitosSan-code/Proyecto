@@ -1,8 +1,33 @@
 from pathlib import Path
+import importlib
 
 from fastapi.testclient import TestClient
 
 from app import app, _format_date_string
+
+
+def test_get_supabase_reuses_single_client(monkeypatch):
+    import database.supabase_client as supabase_client
+
+    calls = []
+
+    class DummyClient:
+        pass
+
+    def fake_create_client(url, key):
+        calls.append((url, key))
+        return DummyClient()
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    monkeypatch.setattr(supabase_client, "_SUPABASE_CLIENT", None, raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "supabase", type("S", (), {"create_client": staticmethod(fake_create_client)}))
+
+    first = supabase_client.get_supabase()
+    second = supabase_client.get_supabase()
+
+    assert first is second
+    assert len(calls) == 1
 
 
 def test_liq_views_use_correct_business_rules():

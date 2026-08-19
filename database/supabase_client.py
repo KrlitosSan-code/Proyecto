@@ -7,13 +7,48 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_SUPABASE_CLIENT: Optional[Any] = None
+
+DEFAULT_RESPONSABLES = [
+    "Venta",
+    "Marval",
+    "Open C60",
+    "Cancelación",
+    "Bancolombia",
+    "Sui Loft",
+]
+
+
+def _table_exists(db: Any, table_name: str) -> bool:
+    try:
+        db.table(table_name).select("escritura").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+def resolve_liq_table_name(db: Optional[Any]) -> str:
+    if not db:
+        return "liq"
+    for table_name in ["liq", "liquida"]:
+        if _table_exists(db, table_name):
+            return table_name
+    return "liq"
+
+
 def get_supabase() -> Optional[Any]:
     """Devuelve la instancia de Supabase cuando exista configuración válida."""
+    global _SUPABASE_CLIENT
+
     url = os.getenv("SUPABASE_URL", "").strip()
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()    
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", os.getenv("SUPABASE_KEY", "")).strip()
 
     if not url or not key:
+        _SUPABASE_CLIENT = None
         return None
+
+    if _SUPABASE_CLIENT is not None:
+        return _SUPABASE_CLIENT
 
     try:
         from supabase import create_client
@@ -21,8 +56,10 @@ def get_supabase() -> Optional[Any]:
         return None
 
     try:
-        return create_client(url, key)
+        _SUPABASE_CLIENT = create_client(url, key)
+        return _SUPABASE_CLIENT
     except Exception:
+        _SUPABASE_CLIENT = None
         return None
 
 def insert_log(action: str, message: str, usuario: str = "sistema", nivel: str = "info") -> dict:
@@ -71,11 +108,11 @@ def insert_liq_row(row: dict) -> Any:
     if not db:
         raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
 
+    table_name = resolve_liq_table_name(db)
     try:
-        response = db.table('liq').insert(row).execute()
+        response = db.table(table_name).insert(row).execute()
         return response
-    except Exception as e:
-        print(f"Error en insert_liq_row: {e}")
+    except Exception:
         raise
 
 def update_liq_row(escritura: str, row: dict) -> Any:
@@ -84,11 +121,11 @@ def update_liq_row(escritura: str, row: dict) -> Any:
     if not db:
         raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
 
+    table_name = resolve_liq_table_name(db)
     try:
-        response = db.table('liq').update(row).eq('escritura', escritura).execute()
+        response = db.table(table_name).update(row).eq('escritura', escritura).execute()
         return response
-    except Exception as e:
-        print(f"Error en update_liq_row: {e}")
+    except Exception:
         raise
 
 def get_pending_liq(limit: int = 10000, page: int = 1, sort_by: str = 'escritura', desc: bool = False) -> Any:
@@ -96,22 +133,17 @@ def get_pending_liq(limit: int = 10000, page: int = 1, sort_by: str = 'escritura
     db = get_supabase()
     if not db:
         return type('obj', (object,), {'data': []})()
-    
+
+    table_name = resolve_liq_table_name(db)
     try:
         offset = (page - 1) * limit
-        query = db.table('liq').select('*')
-        
-        # Aplicar paginación
+        query = db.table(table_name).select('*')
         query = query.range(offset, offset + limit - 1)
-        
-        # Aplicar ordenamiento
         if sort_by:
             query = query.order(sort_by, desc=desc)
-        
         response = query.execute()
         return response
-    except Exception as e:
-        print(f"Error en get_pending_liq: {e}")
+    except Exception:
         return type('obj', (object,), {'data': []})()
 
 def update_liq_estado_by_escritura(escritura: str, estado: str, activity_type: str = None) -> Any:
@@ -134,23 +166,23 @@ def get_liq_stats() -> dict:
     db = get_supabase()
     if not db:
         return {"total": 0, "liq": 0, "liq_2025": 0, "liq_2026": 0}
-    
+
     try:
         stats = {"total": 0, "liq": 0, "liq_2025": 0, "liq_2026": 0}
-        
-        # Contar registros por tabla
-        for table_name in ['liq', 'liq_2025', 'liq_2026']:
+        for table_name in ['liq', 'liquida', 'liq_2025', 'liq_2026']:
             try:
+                if not _table_exists(db, table_name):
+                    continue
                 response = db.table(table_name).select('*', count='exact', head=True).execute()
                 count = response.count or 0
                 stats[table_name] = count
                 stats['total'] += count
-            except Exception as e:
-                print(f"Error contando {table_name}: {e}")
-        
+                if table_name == 'liquida':
+                    stats['liq'] = count
+            except Exception:
+                continue
         return stats
-    except Exception as e:
-        print(f"Error en get_liq_stats: {e}")
+    except Exception:
         return {"total": 0, "liq": 0, "liq_2025": 0, "liq_2026": 0}
 
 def get_all_liq(limit: int = 10000, page: int = 1, sort_by: str = 'updated_at', desc: bool = True) -> Any:
@@ -158,22 +190,17 @@ def get_all_liq(limit: int = 10000, page: int = 1, sort_by: str = 'updated_at', 
     db = get_supabase()
     if not db:
         return type('obj', (object,), {'data': []})()
-    
+
+    table_name = resolve_liq_table_name(db)
     try:
         offset = (page - 1) * limit
-        query = db.table('liq').select('*')
-        
-        # Aplicar paginación
+        query = db.table(table_name).select('*')
         query = query.range(offset, offset + limit - 1)
-        
-        # Aplicar ordenamiento
         if sort_by:
             query = query.order(sort_by, desc=desc)
-        
         response = query.execute()
         return response
-    except Exception as e:
-        print(f"Error en get_all_liq: {e}")
+    except Exception:
         return type('obj', (object,), {'data': []})()
 
 def get_processed_liq(limit: int = 10000, page: int = 1, sort_by: str = 'fecha_proceso', desc: bool = True) -> Any:
@@ -181,25 +208,18 @@ def get_processed_liq(limit: int = 10000, page: int = 1, sort_by: str = 'fecha_p
     db = get_supabase()
     if not db:
         return type('obj', (object,), {'data': []})()
-    
+
+    table_name = resolve_liq_table_name(db)
     try:
         offset = (page - 1) * limit
-        query = db.table('liq').select('*')
-        
-        # Filtrar solo procesados
+        query = db.table(table_name).select('*')
         query = query.or_('notificacion.eq.enviado,pago.eq.ingresado')
-        
-        # Aplicar paginación
         query = query.range(offset, offset + limit - 1)
-        
-        # Aplicar ordenamiento
         if sort_by:
             query = query.order(sort_by, desc=desc)
-        
         response = query.execute()
         return response
-    except Exception as e:
-        print(f"Error en get_processed_liq: {e}")
+    except Exception:
         return type('obj', (object,), {'data': []})()
 
 def move_liq_to_table(escritura: str, target: str = None) -> dict:
@@ -524,25 +544,51 @@ def get_table_rows(table_name: str, limit: int = 1000, page: int = 1, sort_by: s
     db = get_supabase()
     if not db:
         return type('obj', (object,), {'data': []})()
-    
+
     try:
-        allowed_tables = {'liq', 'liq_2025', 'liq_2026', 'pagos_2026', 'pagos_consolidado'}
+        allowed_tables = {'liq', 'liquida', 'liq_2025', 'liq_2026', 'pagos_2026', 'pagos_consolidado'}
         if table_name not in allowed_tables:
-            print(f"Tabla no permitida: {table_name}")
             return type('obj', (object,), {'data': []})()
-        
+        if table_name == 'liq' and not _table_exists(db, 'liq') and _table_exists(db, 'liquida'):
+            table_name = 'liquida'
         offset = (page - 1) * limit
         query = db.table(table_name).select('*')
-        
-        # Aplicar paginación
         query = query.range(offset, offset + limit - 1)
-        
-        # Aplicar ordenamiento
         if sort_by:
             query = query.order(sort_by, desc=desc)
-        
         response = query.execute()
         return response
-    except Exception as e:
-        print(f"Error en get_table_rows({table_name}): {e}")
+    except Exception:
         return type('obj', (object,), {'data': []})()
+
+
+def get_responsables() -> list[str]:
+    db = get_supabase()
+    if not db:
+        return DEFAULT_RESPONSABLES
+    try:
+        if not _table_exists(db, 'responsables'):
+            return DEFAULT_RESPONSABLES
+        response = db.table('responsables').select('*').order('nombre').execute()
+        items = response.data or []
+        values = [str(item.get('nombre') or item.get('responsable') or '').strip() for item in items]
+        valid = [v for v in values if v]
+        return valid or DEFAULT_RESPONSABLES
+    except Exception:
+        return DEFAULT_RESPONSABLES
+
+
+def upsert_responsable(nombre: str) -> list[str]:
+    nombre = (nombre or '').strip()
+    if not nombre:
+        return get_responsables()
+    db = get_supabase()
+    if not db:
+        return get_responsables()
+    try:
+        if not _table_exists(db, 'responsables'):
+            return get_responsables()
+        db.table('responsables').upsert({'nombre': nombre}, on_conflict='nombre').execute()
+        return get_responsables()
+    except Exception:
+        return get_responsables()

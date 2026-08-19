@@ -28,19 +28,18 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from database.supabase_client import delete_acta, get_acta_by_id, get_actas_by_escritura, get_pagos_2026_resumen, get_supabase, import_pagos_from_rows, insert_acta, insert_log, update_acta, upsert_pago_2026
+from database.supabase_client import delete_acta, get_acta_by_id, get_actas_by_escritura, get_pagos_2026_resumen, get_responsables, get_supabase, import_pagos_from_rows, insert_acta, insert_log, update_acta, upsert_pago_2026, upsert_responsable
 from repositories.liq_repository import LiqRepository
 from services.workflow_service import WorkflowService
+
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
 load_dotenv()
 
 # Importaciones de módulos locales
 try:
     from database.supabase_client import (
         check_table_exists,
-        insert_certificado,
-        update_certificado_estado,
-        get_certificados_por_usuario,
-        insert_recibo,
         guardar_descarga,
         import_actas_from_rows,
         import_liq_from_rows,
@@ -54,10 +53,6 @@ try:
 except ImportError:
     from database.supabase_client import (
         check_table_exists,
-        insert_certificado,
-        update_certificado_estado,
-        get_certificados_por_usuario,
-        insert_recibo,
         guardar_descarga,
         obtener_descargas_por_escritura,
         obtener_descargas_pendientes_de_envio,
@@ -1028,7 +1023,7 @@ def liq_processed(limit: int = 10000, page: int = 1, sort_by: str = 'fecha_proce
 @app.get('/api/liq/table/{table_name}')
 def liq_table(table_name: str, limit: int = 1000, page: int = 1, sort_by: str = None, desc: bool = True):
     try:
-        allowed = {'liq', 'liq_2025', 'liq_2026', 'pagos_2026', 'pagos_consolidado'}
+        allowed = {'liq', 'liquida', 'liq_2025', 'liq_2026', 'pagos_2026', 'pagos_consolidado'}
         if table_name not in allowed:
             raise HTTPException(status_code=400, detail=f"Tabla no permitida: {table_name}")
         if not get_supabase():
@@ -1039,6 +1034,27 @@ def liq_table(table_name: str, limit: int = 1000, page: int = 1, sort_by: str = 
         raise
     except Exception as e:
         insert_log('consulta_tabla_liq', str(e), 'sistema', 'error')
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get('/api/responsables')
+def get_responsables_api():
+    try:
+        return get_responsables()
+    except Exception as e:
+        insert_log('consulta_responsables', str(e), 'sistema', 'error')
+        return []
+
+@app.post('/api/responsables')
+def create_responsable(payload: dict):
+    try:
+        nombre = str(payload.get('nombre') or payload.get('responsable') or '').strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail='Falta el nombre del responsable')
+        return {"status": "ok", "responsables": upsert_responsable(nombre)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        insert_log('guardar_responsable', str(e), 'sistema', 'error')
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/liq")

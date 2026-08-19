@@ -14,7 +14,6 @@ class LiqRepository:
         )
         
     def certificados_pendientes(self):
-        print(self.supabase)
         result = (
             self.supabase
             .table("liq")
@@ -24,7 +23,6 @@ class LiqRepository:
             .neq("estado_ctl", "procesando")
             .execute()
         )
-        print(f"resultado: {len(result.data)}")
         return result.data or []
     
     def certificados_procesando(self):

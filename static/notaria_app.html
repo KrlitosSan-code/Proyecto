@@ -22,7 +22,7 @@
   </div>
   <div class="header-actions">
     <button class="btn btn-ghost hamburger" id="btn-hamburger" onclick="toggleSidebar()"><i class="fa fa-bars"></i></button> 
-    <div id="user-id" style="margin-right:8px;color:#f0efec;font-size:12px">HG4m2z48</div>
+    <div id="user-id" style="margin-right:8px;color:#f0efec;font-size:12px">EM1c31s38</div>
     <button class="btn btn-primary btn-sm" onclick="openAddModal()">Nuevo Registro <i class="fa fa-plus"></i></button>
     <button class="btn btn-secondary btn-sm" onclick="descargarCertificados()">Descargar Certificados <i class="fa fa-download"></i></button>
     <button class="btn btn-secondary btn-sm" onclick="enviarCertificados()">Envío Certificados <i class="fa fa-paper-plane"></i></button>
@@ -97,6 +97,26 @@
 
   <!-- MAIN CONTENT -->
   <main class="main">
+    <div class="table-toolbar global-toolbar" id="global-toolbar">
+      <input
+          type="text"
+          id="global-search"
+          placeholder="🔍 Buscar por Escritura, NIR, Cliente, Cédula..."
+          style="flex: 1; min-width: 250px;"
+          oninput="aplicarFiltroGlobal()"
+      >
+      <select class="select-filter" id="global-filter-estado" onchange="aplicarFiltroGlobal()">
+          <option value="">Registro Pendiente / Procesar</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="enviado">Enviado</option>
+          <option value="procesando">Procesando</option>
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="limpiarFiltros()">Limpiar <i class="fa-solid fa-feather"></i></button>
+      <span id="global-contador" style="font-size: 13px; color: #64748b; font-weight: 500; white-space: nowrap;">
+          Mostrando 0 registros
+      </span>
+    </div>
+
     <!-- DASHBOARD -->
     <div id="view-dashboard" class="view active fade-in">
       <div class="section-title">Panel de Control</div> 
@@ -174,60 +194,15 @@
       </div>
     </div>
 
-    <div class="table-toolbar">
-      <!-- Buscador en tiempo real -->
-      <input 
-          type="text" 
-          id="input-busqueda-global" 
-          placeholder="🔍 Buscar por Escritura, NIR, Cliente, Cédula..." 
-          style="flex: 1; min-width: 250px;"
-          oninput="filtrarTabla()"
-      >
-
-      <!-- Selector rápido por Estado -->
-      <select id="select-filtro-estado" onchange="filtrarTabla()">
-          <option value="">Todos los estados</option>
-          <option value="pendiente">🟡 Registro Pendiente / Procesar</option>
-          <option value="pagado">🟢 Pagado / Completado</option>
-          <option value="error">🔴 Error / Faltante</option>
-      </select>
-
-      <!-- Indicador de cantidad de filas -->
-      <span id="tabla-contador" style="font-size: 13px; color: #64748b; font-weight: 500;">
-          Mostrando 0 registros
-      </span>
-  </div>
-
     <!-- REGISTROS -->
     <div id="view-registros" class="view fade-in">
       <div class="section-title">Registros</div>
-
-      <div class="toolbar">
-        <div class="search-box">
-          <input type="text" placeholder="Buscar..." id="search-input" oninput="renderTable()">
-        </div>
-        <select class="select-filter" id="filter-notificacion" onchange="renderTable()">
-          <option value="">Notificaciones</option>
-          <option value="enviado">Enviado</option>
-          <option value="pendiente">Pendiente</option>
-        </select>        
-        <select class="select-filter" id="filter-pago" onchange="renderTable()">
-          <option value="">Pagos</option>
-          <option value="ingresado">Ingresado</option>
-          <option value="pendiente">Pendiente</option>
-        </select>
-        <select class="select-filter" id="filter-estado" onchange="renderTable()">
-          <option value="">Estado</option>
-          <option value="pendiente">Pendiente</option>
-          <option value="enviado">Enviado</option>
-          <option value="procesando">Procesando</option>
-        </select>
-        <select class="select-filter" id="filter-gob" onchange="renderTable()">
-          <option value="">Gobernaciones</option>
-        </select>
-        <button class="btn btn-secondary btn-sm" onclick="limpiarFiltros()">Limpiar <i class="fa-solid fa-feather"></i></button>
-        <button class="btn btn-primary btn-sm" onclick="exportarCSV()">Exportar <i class="fa-solid fa-upload"></i> </button>
-      </div>
+      <!-- inputs ocultos para compatibilidad con getFiltered() que los lee con || {value:''} -->
+      <input type="hidden" id="search-input">
+      <input type="hidden" id="filter-notificacion">
+      <input type="hidden" id="filter-pago">
+      <input type="hidden" id="filter-estado">
+      <input type="hidden" id="filter-gob">
 
       <div class="table-wrap">
         <div class="table-header-bar">
@@ -262,17 +237,9 @@
     <!-- PENDIENTES -->
     <div id="view-pendientes" class="view fade-in"> 
       <div class="section-title">Pendientes <i class="fa-solid fa-file"></i></div>
-      <div class="toolbar">
-        <div class="search-box">
-          <input type="text" placeholder="Filtro:" id="search-pendientes" oninput="renderPendientes()">
-        </div>
-        <select class="select-filter" id="filter-pago-pendientes" onchange="renderPendientes()">
-          <option value="">Pagos</option>
-          <option value="pendiente">Pendiente</option>
-          <option value="ingresado">Ingresado</option>
-        </select>
-        <button class="btn btn-secondary btn-sm" onclick="limpiarFiltrosPendientes()">Limpiar <i class="fa-solid fa-feather"></i></button>
-      </div>
+      <!-- inputs ocultos para compatibilidad con getFilteredPendientes() -->
+      <input type="hidden" id="search-pendientes">
+      <input type="hidden" id="filter-pago-pendientes">
       <div class="table-wrap">
         <table>
           <thead>
@@ -295,19 +262,10 @@
 
     <!-- PROCESAR -->
     <div id="view-procesados" class="view fade-in">
-      <div class="section-title">Procesar <i class="fa-solid fa-file"></i>  </div>
-      <div class="toolbar">
-        <div class="search-box">
-          <input type="text" placeholder="Filtro:" id="search-procesados" oninput="renderProcesados()">
-        </div>
-        <select class="select-filter" id="filter-estado-procesados" onchange="renderProcesados()">
-          <option value="">Estados</option>
-          <option value="pendiente">Pendiente</option>
-          <option value="enviado">Enviado</option>
-          <option value="procesando">Procesando</option>
-        </select>
-        <button class="btn btn-secondary btn-sm" onclick="limpiarFiltrosProcesados()">Limpiar <i class="fa-solid fa-feather"></i></button>
-      </div>
+      <div class="section-title">Procesar <i class="fa-solid fa-file"></i></div>
+      <!-- inputs ocultos para compatibilidad con getFilteredProcesados() -->
+      <input type="hidden" id="search-procesados">
+      <input type="hidden" id="filter-estado-procesados">
       <div class="table-wrap">
         <table>
           <thead>
@@ -644,7 +602,12 @@
             <option value="descargado">Descargado</option>
             <option value="enviado">Enviado</option>
           </select>
-        </div>   
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Responsable</label>
+          <input class="form-input" id="add-responsable" list="opciones-responsable" placeholder="Seleccione o escriba un nuevo responsable...">
+          <datalist id="opciones-responsable"></datalist>
+        </div>
         <div class="form-group full">
           <label class="form-label">Ruta Documento</label>
           <input class="form-input" id="add-ruta" placeholder="Ruta del documento...">
@@ -657,37 +620,9 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-add')"><i class="fa fa-times"></i></button>
-      <!-- Nuevo: guardar sin procesar -->
       <button class="btn btn-primary" onclick="guardarNuevoRegistro()"><i class="fa fa-save"></i></button>
-      <div class="form-group full">
-      <label class="form-label">Ruta Documento</label>
-      <input class="form-input" id="add-ruta">
-    </div>
     </div>        
   </div>
-</div>
-
-<div class="form-group">
-  <label for="responsable-input">Responsable:</label>
-  <input 
-    type="text" 
-    id="responsable-input" 
-    name="responsable" 
-    class="form-control" 
-    list="opciones-responsable" 
-    placeholder="Seleccione o escriba un nuevo responsable..." 
-    value="Venta"
-  >
-  
-  <!-- Lista dinámica sugerida -->
-  <datalist id="opciones-responsable">
-    <option value="Venta"></option>
-    <option value="Marval"></option>
-    <option value="Open C60"></option>
-    <option value="Cancelación"></option>
-    <option value="Bancolombia"></option>
-    <option value="Sui Loft"></option>
-  </datalist>
 </div>
 
 <!-- MODAL: NUEVA ACTA (Pagos 2026) -->
@@ -1088,6 +1023,12 @@ function getFilteredLiqTable(tableName) {
 }
 
 function renderCurrentView() {
+  const toolBar = document.getElementById('global-toolbar');
+  if (toolBar) {
+    const shouldShow = ['registros', 'pendientes', 'procesados', 'liq2025', 'liq2026'].includes(currentView);
+    toolBar.style.display = shouldShow ? 'flex' : 'none';
+  }
+
   if (currentView === 'pendientes') renderPendientes();
   else if (currentView === 'procesados') renderProcesados();
   else if (currentView === 'registros') renderTable();
@@ -1174,32 +1115,67 @@ function normalizarTexto(valor){
     .trim();
 }
 
-function filtrarTabla(){
-  const inputBusqueda = document.getElementById('input-busqueda-global');
-  const selectEstado = document.getElementById('select-filtro-estado');
-  const queryBusqueda = normalizarTexto(inputBusqueda ? inputBusqueda.value : '');
-  const estadoFiltro = normalizarTexto(selectEstado ? selectEstado.value : '');
+function aplicarFiltroGlobal() {
+  const globalInput = document.getElementById('global-search');
+  // CAMBIO: ahora el select se llama 'global-filter-estado' (antes era 'global-filter-estado' pero no existía en el DOM — ahora sí existe)
+  const globalSelect = document.getElementById('global-filter-estado');
+  const query = (globalInput ? globalInput.value : '').trim();
+  const estadoValue = (globalSelect ? globalSelect.value : '').trim();
 
-  estadoTabla.datosFiltrados = estadoTabla.datosOriginales.filter(item =>{
-    const escritura = normalizarTexto(item.escritura || item.num_escritura);
-    const nir = normalizarTexto(item.nir);
-    const cliente = normalizarTexto(item.cliente || item.nombre_cliente);
-    const correo = normalizarTexto(item.correo || item.correo_cliente);
-    const estado_ctl = normalizarTexto(item.estado_ctl);
+  // Propagar el query a los inputs hidden de cada vista para que sus funciones getFiltered* los lean
+  const inputMap = {
+    'search-input': query,          // usado por getFiltered() → vista Registros
+    'search-pendientes': query,     // usado por getFilteredPendientes() → vista Pendientes
+    'search-procesados': query,     // usado por getFilteredProcesados() → vista Procesados
+  };
+  Object.entries(inputMap).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val;
+  });
 
-    const coincideTexto = !queryBusqueda || 
-            escritura.includes(queryBusqueda) ||
-            nir.includes(queryBusqueda) ||
-            cliente.includes(queryBusqueda) ||
-            correo.includes(queryBusqueda);
+  // Propagar el estado a los selects hidden de cada vista
+  const estadoMap = {
+    'filter-estado': estadoValue,
+    'filter-estado-procesados': estadoValue,
+  };
+  Object.entries(estadoMap).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val;
+  });
 
-        // 2. Coincidencia por Filtro de Estado Especifico
-        const coincideEstado = !estadoFiltro || estado_ctl.includes(estadoFiltro);
+  // Renderizar la vista activa
+  if (currentView === 'registros') {
+    renderTable();
+  } else if (currentView === 'pendientes') {
+    renderPendientes();
+  } else if (currentView === 'procesados') {
+    renderProcesados();
+  } else if (currentView === 'liq2025') {
+    const input = document.getElementById('search-liq2025');
+    if (input) input.value = query;
+    renderLiqTable('liq_2025');
+  } else if (currentView === 'liq2026') {
+    const input = document.getElementById('search-liq2026');
+    if (input) input.value = query;
+    renderLiqTable('liq_2026');
+  } else {
+    renderCurrentView();
+  }
 
-        return coincideTexto && coincideEstado;
-  })
-  renderizarTabla(estadoTabla.datosFiltrados);
+  // Actualizar contador global
+  const contador = document.getElementById('global-contador');
+  if (contador) {
+    const total = (() => {
+      if (currentView === 'pendientes') return getFilteredPendientes().length;
+      if (currentView === 'procesados') return getFilteredProcesados().length;
+      if (currentView === 'liq2025') return getFilteredLiqTable('liq_2025').length;
+      if (currentView === 'liq2026') return getFilteredLiqTable('liq_2026').length;
+      return getFiltered().length;
+    })();
+    contador.textContent = `Mostrando ${total} registro${total !== 1 ? 's' : ''}`;
+  }
 }
+
 
 function obtenerBadgeEstado(estado){
   const est = normalizarTexto(estado);
@@ -1736,17 +1712,46 @@ function generarInformePagos() {
     window.open(url, '_blank');
 }
 
+async function cargarResponsables() {
+  const datalist = document.getElementById('opciones-responsable');
+  if (!datalist) return;
+  datalist.innerHTML = '';
+
+  const defaults = ['Venta', 'Marval', 'Open C60', 'Cancelación', 'Bancolombia', 'Sui Loft'];
+  try {
+    const response = await fetch('/api/responsables');
+    let items = defaults;
+    if (response.ok) {
+      const data = await response.json();
+      const list = Array.isArray(data) ? data : Array.isArray(data.responsables) ? data.responsables : [];
+      const values = list.map(v => String(v || '').trim()).filter(Boolean);
+      if (values.length) items = values;
+    }
+    items.forEach(value => {
+      const option = document.createElement('option');
+      option.value = value;
+      datalist.appendChild(option);
+    });
+  } catch (e) {
+    defaults.forEach(value => {
+      const option = document.createElement('option');
+      option.value = value;
+      datalist.appendChild(option);
+    });
+  }
+}
+
 function registrarNuevoResponsable(nombreResponsable) {
     if (!nombreResponsable) return;
-    
     const datalist = document.getElementById('opciones-responsable');
-    const existe = Array.from(datalist.options).some(opt => opt.value === nombreResponsable);
-    
+    const existe = Array.from(datalist?.options || []).some(opt => opt.value === nombreResponsable);
     if (!existe) {
         const nuevaOpcion = document.createElement('option');
         nuevaOpcion.value = nombreResponsable;
-        datalist.appendChild(nuevaOpcion);
+        datalist?.appendChild(nuevaOpcion);
     }
+    const input = document.getElementById('add-responsable');
+    if (input) input.value = nombreResponsable;
 }
 
 //========================================
@@ -1938,8 +1943,10 @@ async function cargarDashboardStatus() {
       )}%`;
     document.getElementById('stat-ratio').textContent = 
       `${data.recibos_enviados || 0} / ${data.total_registros || 0}`;
-    document.getElementById('stat-errores').textContent 
-    = data.errores || 0;
+    const erroresEl = document.getElementById('stat-errores');
+    if (erroresEl) {
+      erroresEl.textContent = data.errores || 0;
+    }
   } catch (error) {
     console.error('Error al cargar el estado del dashboard:', error);
   }
@@ -2087,16 +2094,17 @@ function renderTable() {
     const docs = (DOCUMENTOS[normalizarEscritura(r.escritura)] || []).length;
     const chk = selectedRows.has(r.escritura) ? 'checked' : '';
     const draft = BORRADORES[normalizarEscritura(r.escritura)];
+    const escValue = JSON.stringify(r.escritura);
     return `<tr class="${selectedRows.has(r.escritura) ? 'selected' : ''}">      
       <td><div class="row-actions">
-        <button class="btn btn-primary btn-sm" title="Enviar a pendientes" onclick="enviarAPendientes(${JSON.stringify(r.escritura)})"><i class="fas fa-cogs"></i></button>        
-        <button class="btn btn-ghost btn-sm" title="Vista previa Certificado" onclick="previsualizarBorrador(${JSON.stringify(r.escritura)},'certificado')"><i class="fas fa-file-lines"></i></button>
-        <button class="btn btn-ghost btn-sm" title="Vista previa Recibo" onclick="previsualizarBorrador(${JSON.stringify(r.escritura)},'recibo')"><i class="fas fa-receipt"></i></button>
-        ${draft?`<button class="btn btn-secondary btn-sm" title="Ver último borrador generado" onclick="verCorreo(${JSON.stringify(r.escritura)})"><i class="fas fa-envelope"></i></button>`:''}
+        <button class="btn btn-primary btn-sm" title="Enviar a pendientes" onclick='enviarAPendientes(${escValue})'><i class="fas fa-cogs"></i></button>        
+        <button class="btn btn-ghost btn-sm" title="Vista previa Certificado" onclick='previsualizarBorrador(${escValue},"certificado")'><i class="fas fa-file-lines"></i></button>
+        <button class="btn btn-ghost btn-sm" title="Vista previa Recibo" onclick='previsualizarBorrador(${escValue},"recibo")'><i class="fas fa-receipt"></i></button>
+        ${draft ? `<button class="btn btn-secondary btn-sm" title="Ver último borrador generado" onclick='verCorreo(${escValue})'><i class="fas fa-envelope"></i></button>` : ''}
       </div></td>          
       <td class="td-escritura">
         <div class="row-actions"> ${r.escritura}
-        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="verDetalle(${JSON.stringify(r.escritura)})"><i class="fas fa-eye"></i></button>
+        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
       </div></td>  
       <td class="mono">${r.nir||'—'}</td>
       <td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.correo||''}">${r.correo||'—'}</td>
@@ -2106,7 +2114,7 @@ function renderTable() {
       <td>${gobBadge(r.gobernacion)}</td>
       <td style="text-align:center">${docs ? `<span class="badge badge-ingresado">${docs} doc${docs!==1?'s':''}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
       <td style="font-size:10px;color:var(--muted)">${r.fecha_proceso||'—'}</td>
-      <td class="cb-wrap"><input type="checkbox" ${chk} onchange="toggleRow(${JSON.stringify(r.escritura)},this)"></td>       
+      <td class="cb-wrap"><input type="checkbox" ${chk} onchange='toggleRow(${escValue},this)'></td>       
     </tr>`;
   }).join('');
   renderPagination('registros', rows.length);
@@ -2122,6 +2130,7 @@ function renderDashTable() {
   }
   tbody.innerHTML = rows.map(r => {
     const tipo = esRecibo(r) ? `<span class="badge badge-ingresado">Recibo</span>` : `<span class="badge badge-pendiente">Certificado</span>`;
+    const escValue = JSON.stringify(r.escritura);
     return `<tr>
       <td class="td-escritura">${r.escritura}</td>
       <td class="mono">${r.nir||'—'}</td>
@@ -2129,7 +2138,7 @@ function renderDashTable() {
       <td>${tipo}</td>
       <td>${gobBadge(r.gobernacion)}</td>
       <td>${estadoBadge(r.estado_ctl)}</td>
-      <td><button class="btn btn-primary btn-sm" onclick="procesarUno(${JSON.stringify(r.escritura)})"><i class="fas fa-cogs"></i> Procesar</button></td>
+      <td><button class="btn btn-primary btn-sm" onclick='procesarUno(${escValue})'><i class="fas fa-cogs"></i> Procesar</button></td>
     </tr>`;
   }).join('');
 }
@@ -2151,6 +2160,7 @@ function renderPendientes() {
   tbody.innerHTML = pageRows.map(r => {
     const tipo = esRecibo(r) ? `<span class="tipo-recibo">Recibo</span>` : `<span class="tipo-cert">Certificado</span>`;
     const docs = (DOCUMENTOS[normalizarEscritura(r.escritura)] || []).length;
+    const escValue = JSON.stringify(r.escritura);
     return `<tr>
       <td class="td-escritura">${r.escritura}</td>
       <td class="mono">${r.nir||'—'}</td>
@@ -2160,8 +2170,8 @@ function renderPendientes() {
       <td>${pagoBadge(r.pago)}</td>
       <td>${docs?`<span class="badge badge-ingresado">${docs}</span>`:'<span style="color:var(--muted)">0</span>'}</td>
       <td><div class="row-actions">
-        <button class="btn btn-ghost btn-sm" onclick="verDetalle(${JSON.stringify(r.escritura)})"><i class="fas fa-eye"></i></button>
-        <button class="btn btn-primary btn-sm" onclick="enviarAProcesar(${JSON.stringify(r.escritura)})"><i class="fas fa-cogs"></i> Procesar</button>
+        <button class="btn btn-ghost btn-sm" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
+        <button class="btn btn-primary btn-sm" onclick='enviarAProcesar(${escValue})'><i class="fas fa-cogs"></i> Procesar</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -2184,18 +2194,19 @@ function renderProcesados() {
   const pageRows = paginateRows(rows, pageState.page, pageState.pageSize);
   tbody.innerHTML = pageRows.map(r => {
     const draft = BORRADORES[normalizarEscritura(r.escritura)];
+    const escValue = JSON.stringify(r.escritura);
     return `<tr>
       <td class="td-escritura"><div class="row-actions">${r.escritura}
-        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="verDetalle(${JSON.stringify(r.escritura)})"><i class="fas fa-eye"></i></button>
+        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
       </div></td>
       <td class="mono">${r.nir||'—'}</td>
       <td style="font-size:11px">${r.correo||'—'}</td>
       <td>${estadoBadge(r.estado_ctl)}</td>
       <td style="font-size:10px;color:var(--muted)">${r.fecha_proceso||'—'}</td>
-      <td>${draft?`<button class="btn btn-secondary btn-sm" onclick="verCorreo('${r.escritura}')"><i class="fas fa-envelope"></i> Ver borrador</button>`:'<span style="color:var(--muted)">—</span>'}</td>
+      <td>${draft ? `<button class="btn btn-secondary btn-sm" onclick='verCorreo(${JSON.stringify(r.escritura)})'><i class="fas fa-envelope"></i> Ver borrador</button>` : '<span style="color:var(--muted)">—</span>'}</td>
       <td><div class="row-actions">
         
-        <button class="btn btn-primary btn-sm" title="Procesar" onclick="procesarUno(${JSON.stringify(r.escritura)})"><i class="fas fa-cogs"></i></button>
+        <button class="btn btn-primary btn-sm" title="Procesar" onclick='procesarUno(${escValue})'><i class="fas fa-cogs"></i></button>
       </div></td>
     </tr>`;
   }).join('');
@@ -2235,9 +2246,11 @@ async function loadLiqTable(tableName) {
     const pageRows = paginateRows(rows, pageState.page, pageState.pageSize);
     tbody.innerHTML = pageRows.map(r => {
       const esc = r.escritura || '';
+      const escValue = JSON.stringify(esc);
       return `<tr>
-        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="verDetalle(${JSON.stringify(esc)})"><i class="fas fa-eye"></i></button>
-        <td class="td-escritura">${r.escritura || '—'}</td>
+        <td class="td-escritura"><div class="row-actions">${r.escritura || '—'}
+          <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
+        </div></td>
         <td class="mono">${r.nir || '—'}</td>
         <td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.correo || ''}">${r.correo || '—'}</td>        
         <td>${estadoBadge(r.notificacion)}</td>
@@ -2246,7 +2259,7 @@ async function loadLiqTable(tableName) {
         <td>${gobBadge(r.gobernacion)}</td>
         <td style="font-size:10px;color:var(--muted)">${r.fecha_proceso || r.updated_at || '—'}</td>
         <td><div class="row-actions">
-          <button class="btn btn-primary btn-sm" title="Procesar" onclick="procesarUno(${JSON.stringify(esc)})"><i class="fas fa-cogs"></i></button>
+          <button class="btn btn-primary btn-sm" title="Procesar" onclick='procesarUno(${escValue})'><i class="fas fa-cogs"></i></button>
         </div></td>
       </tr>`;
     }).join('');
@@ -2456,13 +2469,20 @@ function seleccionarTodos() {
   renderTable();
 }
 function limpiarFiltros() {
-  document.getElementById('search-input').value = '';
-  document.getElementById('filter-estado').value = '';
-  document.getElementById('filter-pago').value = '';
-  document.getElementById('filter-notificacion').value = '';
-  document.getElementById('filter-gob').value = '';
+  // Limpiar barra global (único punto de control tras quitar los filtros individuales)
+  const gs = document.getElementById('global-search');
+  if (gs) gs.value = '';
+  const gfe = document.getElementById('global-filter-estado');
+  if (gfe) gfe.value = '';
+  // Los hidden inputs se limpian también para que getFiltered() no lea basura
+  ['search-input','filter-estado','filter-pago','filter-notificacion','filter-gob',
+   'search-pendientes','filter-pago-pendientes','search-procesados','filter-estado-procesados'
+  ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   resetPagination('registros');
-  renderTable();
+  resetPagination('pendientes');
+  resetPagination('procesados');
+  renderCurrentView();
+  aplicarFiltroGlobal();
 }
 function limpiarFiltrosPendientes() {
   const input = document.getElementById('search-pendientes');
@@ -2481,23 +2501,23 @@ function limpiarFiltrosProcesados() {
   renderProcesados();
 }
 function filtrarPorGob(gob) {
-  const active = document.querySelector('.view.active');
-  if (active && active.id === 'view-pendientes') {
-    const f = document.getElementById('filter-pend-gob');
-    if (f) f.value = gob;
-    renderPendientes();
-    return;
-  }
-  if (active && active.id === 'view-procesados') {
-    const f = document.getElementById('filter-proc-gob');
-    if (f) f.value = gob;
-    renderProcesados();
-    return;
-  }
-  setView('registros', document.querySelector('.sidebar-item:nth-child(2)'));
-  const f = document.getElementById('filter-gob');
-  if (f) f.value = gob;
+  // Navegar siempre a Registros para mostrar el filtro por gobernación
+  const sidebarRegistros = document.querySelector('.sidebar-item[onclick*="registros"]');
+  setView('registros', sidebarRegistros);
+  // Poner el valor en el input hidden para que getFiltered() lo tome
+  const fg = document.getElementById('filter-gob');
+  if (fg) fg.value = gob;
+  // Limpiar búsqueda global para que no interfiera
+  const gs = document.getElementById('global-search');
+  if (gs) gs.value = '';
+  resetPagination('registros');
   renderTable();
+  // Actualizar contador
+  const contador = document.getElementById('global-contador');
+  if (contador) {
+    const total = getFiltered().length;
+    contador.textContent = `Mostrando ${total} registro${total !== 1 ? 's' : ''}`;
+  }
 }
 async function eliminarRegistro(esc) {
   // Opcional: Confirmación de seguridad antes de proceder
@@ -2786,6 +2806,17 @@ function openAddModal() {
 async function saveRegistroToServer(reg) {
   const allowed = ['escritura','nir','correo','notificacion','pago','estado_ctl','gobernacion','devolucion','escritura_str','fecha_proceso'];
   const payload = Object.fromEntries(Object.entries(reg).filter(([k]) => allowed.includes(k)));
+  if (payload.responsable) {
+    try {
+      await fetch('/api/responsables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre: payload.responsable }),
+      });
+    } catch (e) {
+      console.warn('No se pudo guardar responsable del registro:', e);
+    }
+  }
   const response = await fetch('/api/liq', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2894,6 +2925,7 @@ async function guardarNuevoRegistro(procesar = false) {
     escritura: normalizarEscritura(esc),
     correo: correo,
     nir: nir,
+    responsable: document.getElementById('add-responsable')?.value.trim() || 'Venta',
     notificacion: document.getElementById('add-notif').value,
     pago: document.getElementById('add-pago').value,
     estado_ctl: document.getElementById('add-estado').value,
@@ -3563,16 +3595,42 @@ function setView(name, el) {
   if (view) { view.classList.add('active'); view.classList.add('fade-in'); }
   if (el) el.classList.add('active');
   renderCurrentView();
+
+  // CAMBIO: mostrar toolbar solo en vistas con tablas de registros/liq; ocultarlo en el resto
+  const toolbarViews = ['registros', 'pendientes', 'procesados', 'liq2025', 'liq2026'];
+  const toolbar = document.getElementById('global-toolbar');
+  if (toolbar) toolbar.style.display = toolbarViews.includes(name) ? 'flex' : 'none';
+
+  // Sincronizar el campo de búsqueda global con el valor actual de la vista entrante
+  const globalInput = document.getElementById('global-search');
+  const globalSelect = document.getElementById('global-filter-estado');
+  if (globalInput) {
+    const searchValue = (
+      name === 'registros'  ? document.getElementById('search-input')?.value :
+      name === 'pendientes' ? document.getElementById('search-pendientes')?.value :
+      name === 'procesados' ? document.getElementById('search-procesados')?.value :
+      name === 'liq2025'    ? document.getElementById('search-liq2025')?.value :
+      name === 'liq2026'    ? document.getElementById('search-liq2026')?.value : ''
+    ) || '';
+    globalInput.value = searchValue;
+  }
+  if (globalSelect) globalSelect.value = '';
 }
 
 // ================================================================
 // MODALS
 // ================================================================
 function openModal(id) {
-  document.getElementById(id).classList.add('open');
+  const target = document.getElementById(id);
+  if (!target) return;
+  document.querySelectorAll('.modal-overlay').forEach(m => {
+    if (m !== target) m.classList.remove('open');
+  });
+  target.classList.add('open');
 }
 function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
+  const target = document.getElementById(id);
+  if (target) target.classList.remove('open');
 }
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });

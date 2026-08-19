@@ -28,6 +28,8 @@ cd c:/Users/krlit/source/Proyecto_Notaria
 
 - `HTML_FILE no está definido`: se debe declarar la ruta del archivo HTML principal y apuntarlo a `static/notaria_app.html`.
 - `escritura no está definida` y `acta_id no está definido`: revisar que los handlers de envío no queden con referencias a variables fuera de su alcance; el flujo correcto debe usar `WorkflowService` y parámetros del endpoint.
+- Si los botones no responden en la interfaz, revisa si queda un modal abierto encima de la pantalla. Un `modal-overlay.open` bloquea los clics de fondo; el código ya asegura que solo exista un modal activo a la vez.
+- Si la app no inicia porque el puerto 8000 ya está ocupado, mata el proceso previo o arranca la aplicación en otro puerto libre, por ejemplo `--port 8010`.
 - Si VS Code sigue mostrando errores viejos, recarga la ventana de Python/Pylance o ejecuta:
 
 ```powershell
