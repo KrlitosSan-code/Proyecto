@@ -1530,16 +1530,10 @@ async def import_liq_file(file: UploadFile = File(...), anio: int = 2026):
                 'responsable':  limpiar(row.get('responsable')),
                 'gobernacion':  limpiar(row.get('gobernacion')),
                 'correo':       limpiar(row.get('correo')),
-                'notificacion': limpiar(row.get('notificacion')),
-                'cert':         limpiar(row.get('cert')),
-                'pago':         limpiar(row.get('pago')),
                 'copias':       limpiar(row.get('copias')),
                 'fecha_liq':    parsear_fecha(row.get('fecha_liq')),
-                'benef':        parsear_fecha(row.get('benef')),   # también es fecha
                 'fecha_pago':   parsear_fecha(row.get('fecha_pago')),
                 'radicado':     limpiar(row.get('radicado')),
-                'ingreso':      limpiar(row.get('ingreso')),
-                'estado_ctl':   limpiar(row.get('estado_ctl')),
                 'observaciones':limpiar(row.get('observaciones')),
             })
 
