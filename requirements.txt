@@ -3,6 +3,7 @@ uvicorn
 pandas
 reportlab
 openpyxl
+xlrd>=2.0.1
 httpx
 supabase
 python-dotenv

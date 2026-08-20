@@ -8,6 +8,7 @@ import threading
 import subprocess
 import io
 import logging
+import warnings
 import os
 from pathlib import Path
 import re
@@ -140,6 +141,77 @@ def normalize_import_columns(df: pd.DataFrame) -> pd.DataFrame:
         .str.replace("-", "_")
     )
     return df
+
+LIQ_COLUMN_ALIASES = {
+    'escritura': 'escritura',
+    'nir': 'nir',
+    'responsable': 'responsable',
+    'gobernacion': 'gobernacion',
+    'correo': 'correo',
+    'notificacion': 'notificacion',
+    'cert': 'cert',
+    'pago': 'pago',
+    'copias': 'copias',
+    'fecha_liq': 'fecha_liq',
+    'actas': 'benef',
+    'benef': 'benef',
+    'fecha_pago': 'fecha_pago',
+    'radicado': 'radicado',
+    'ingreso': 'ingreso',
+    'estado_ctl': 'estado_ctl',
+    'observaciones': 'observaciones',
+}
+
+def _find_liq_header_row(raw: pd.DataFrame) -> int:
+    """Encuentra el último bloque de encabezados del informe notarial."""
+    candidates = []
+    for index, row in raw.iterrows():
+        values = {str(value).strip().lower() for value in row.tolist() if pd.notna(value)}
+        if 'escritura' in values and 'notificacion' in values:
+            candidates.append(index)
+    if not candidates:
+        raise ValueError(
+            'No se encontró el encabezado del informe. Se esperaba una columna Escritura.'
+        )
+    return int(candidates[-1])
+
+def _read_liq_file(contents: bytes, filename: str) -> pd.DataFrame:
+    """Lee CSV/XLSX aunque el informe incluya metadata o encabezados repetidos."""
+    lower_name = filename.lower()
+    if lower_name.endswith(('.xlsx', '.xls', '.xlsm')):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                message=r'(Unknown extension|Data Validation extension) is not supported.*',
+                category=UserWarning,
+                module=r'openpyxl\.worksheet\._reader',
+            )
+            raw = pd.read_excel(io.BytesIO(contents), dtype=str, header=None)
+    else:
+        text = contents.decode('utf-8-sig', errors='replace')
+        first_line = text.splitlines()[0] if text.splitlines() else ''
+        separator = ';' if first_line.count(';') >= first_line.count(',') else ','
+        raw = pd.read_csv(
+            io.StringIO(text), dtype=str, sep=separator, header=None,
+            skip_blank_lines=False,
+        )
+
+    header_row = _find_liq_header_row(raw)
+    headers = raw.iloc[header_row].fillna('unnamed').astype(str).str.strip().str.lower()
+    headers = (
+        headers.str.replace('á', 'a')
+        .str.replace('é', 'e')
+        .str.replace('í', 'i')
+        .str.replace('ó', 'o')
+        .str.replace('ú', 'u')
+        .str.replace('ñ', 'n')
+        .str.replace(r'[\s-]+', '_', regex=True)
+    )
+    data = raw.iloc[header_row + 1:].copy()
+    data.columns = headers.tolist()
+    data = data.loc[:, ~data.columns.str.startswith('unnamed')]
+    data = data.rename(columns={key: value for key, value in LIQ_COLUMN_ALIASES.items()})
+    return data
 
 def normalizar_escritura(esc):
     if esc is None:
@@ -588,7 +660,7 @@ def actualizar_pago2026(escritura: int, body: dict):
             vr_reg=body.get('vr_reg'),
             fecha_pago=body.get('fecha_pago'),
             observaciones=body.get('observaciones'),
-            nir=body.get('nir'),
+            liquidacion=body.get('liquidacion'),
             responsable=body.get('responsable'),
         )
         data = result.data if hasattr(result, "data") else result
@@ -1362,110 +1434,147 @@ def start_envio_certificado_unico(body: dict):
     t.start()
     return {"job_id": job_id}
 
-@app.post("/api/import/excel")
-async def import_excel_file(file: UploadFile = File(...), table: str = "liq"):
+@app.post("/api/liq/import")
+async def import_liq_file(file: UploadFile = File(...), anio: int = 2026):
+    """
+    Importa el informe de liquidaciones (Informe_Not_38_Liq.csv / .xlsx).
+
+    Estructura del archivo:
+      Fila 1 → metadata de la notaría  (se descarta)
+      Fila 2 → encabezado bloque "Sin Actas" (se descarta)
+      Fila 3 → única fila del bloque "Sin Actas" (se descarta)
+      Fila 4 → encabezados reales:
+                Escritura;Nir;Responsable;Gobernacion;correo;Notificacion;
+                Cert;Pago;Copias;Fecha_liq;Benef;Fecha_Pago;Radicado;Ingreso;
+                Estado_Ctl;Observaciones
+      Fila 5+ → datos
+
+    Limpieza aplicada:
+      - Fechas "00-01-00" (centinela de fecha vacía) → None
+      - Columnas extras vacías al final → ignoradas
+      - Valores vacíos / NaN → None
+    """
     try:
         if not get_supabase():
-            raise HTTPException(status_code=503, detail="Supabase no configurado.")
-        
-        allowed_tables = {
-            "liq": "liq",
-            "pagos": "pagos_2026",
-            "pagos_consolidado": "pagos_consolidado",
-        }
-        if table not in allowed_tables:
-            raise HTTPException(status_code=400, detail=f"Tabla no válida: {table}")
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_KEY en .env"
+            )
 
         contents = await file.read()
-        if file.filename.lower().endswith(('.xlsx', '.xls')):
-            excel_file = io.BytesIO(contents)
-            df = pd.read_excel(excel_file, dtype=str)
-            csv_text = df.to_csv(index=False, encoding='utf-8')
-        else:
-            text = contents.decode('utf-8', errors='replace')
-            df = pd.read_csv(io.StringIO(text), dtype=str)
-            csv_text = text
+        # Lee el bloque de datos real sin depender de una fila fija.
+        df = _read_liq_file(contents, file.filename or '')
 
-        df = df.where(pd.notna(df), None)
-        df = normalize_import_columns(df)
+        # ── Helpers ───────────────────────────────────────────────────────────
+        def limpiar(v):
+            if v is None:
+                return None
+            if isinstance(v, float) and pd.isna(v):
+                return None
+            s = str(v).strip()
+            return s or None
 
-        if df.empty:
-            raise HTTPException(status_code=400, detail="El archivo está vacío.")
-
-        basic_cols = ["escritura", "nir", "correo", "gobernacion"]
-        default_pending = {
-            "pago": "Ingresado",
-            "estado_ctl": "Pendiente",
-            "notificacion": "Pendiente",
-            "devolucion": "",
+        MESES = {
+            'ene': 1, 'jan': 1, 'feb': 2, 'mar': 3, 'abr': 4, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'ago': 8, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dic': 12, 'dec': 12,
         }
 
-        rows = df.to_dict(orient="records")
-        cleaned_rows = []
-        for row in rows:
-            base = {k: (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k in basic_cols and v is not None and (not isinstance(v, str) or v.strip() != "")}
-            if not all(col in base and base[col] for col in ["escritura", "nir", "correo", "gobernacion"]):
+        FECHA_CENTINELA = {'00-01-00', '00/01/00', '0/1/0', ''}
+
+        def parsear_fecha(raw):
+            raw = limpiar(raw)
+            if not raw or raw in FECHA_CENTINELA:
+                return None
+
+            # Formato dominante en este CSV: DD-MM-YY  (ej. 16-08-26)
+            formats = [
+                '%d-%m-%y', '%d-%m-%Y',
+                '%d/%m/%y', '%d/%m/%Y',
+                '%d/%b/%Y', '%d/%B/%Y',
+                '%d-%b-%Y', '%d-%B-%Y',
+                '%Y-%m-%d', '%Y/%m/%d',
+            ]
+            for fmt in formats:
+                try:
+                    return datetime.strptime(raw, fmt).date().isoformat()
+                except ValueError:
+                    continue
+
+            # Fallback: DD/Mes/YYYY con mes en texto
+            m = re.match(r'(\d{1,2})/([A-Za-z]{3})/(\d{4})', raw)
+            if m:
+                dia, mes_txt, anio_txt = m.groups()
+                mes = MESES.get(mes_txt.lower())
+                if mes:
+                    try:
+                        return datetime(int(anio_txt), mes, int(dia)).date().isoformat()
+                    except ValueError:
+                        pass
+            return None
+
+        # ── Construcción de filas ─────────────────────────────────────────────
+        omitidas_sin_escritura = 0
+        filas = []
+
+        for row in df.to_dict(orient='records'):
+            esc_raw = limpiar(row.get('escritura'))
+
+            # Descartar filas de encabezado repetido o sin número de escritura
+            if not esc_raw or not esc_raw.isdigit():
+                omitidas_sin_escritura += 1
                 continue
-            for k, v in default_pending.items():
-                base.setdefault(k, v)
-            cleaned_rows.append(base)
 
-        target_table = allowed_tables[table]
-        if table == "liq":
-            result = import_liq_from_rows(cleaned_rows, batch_size=100)
-        elif table == "pagos":
-            result = import_pagos_from_rows(cleaned_rows, batch_size=100)
-        else:
-            result = import_pagos_consolidado_from_rows(cleaned_rows, batch_size=100)
+            filas.append({
+                'escritura':    int(esc_raw),
+                'nir':          limpiar(row.get('nir')),
+                'responsable':  limpiar(row.get('responsable')),
+                'gobernacion':  limpiar(row.get('gobernacion')),
+                'correo':       limpiar(row.get('correo')),
+                'notificacion': limpiar(row.get('notificacion')),
+                'cert':         limpiar(row.get('cert')),
+                'pago':         limpiar(row.get('pago')),
+                'copias':       limpiar(row.get('copias')),
+                'fecha_liq':    parsear_fecha(row.get('fecha_liq')),
+                'benef':        parsear_fecha(row.get('benef')),   # también es fecha
+                'fecha_pago':   parsear_fecha(row.get('fecha_pago')),
+                'radicado':     limpiar(row.get('radicado')),
+                'ingreso':      limpiar(row.get('ingreso')),
+                'estado_ctl':   limpiar(row.get('estado_ctl')),
+                'observaciones':limpiar(row.get('observaciones')),
+            })
 
-        insert_log("import_excel", f"Archivo {file.filename} importado en tabla {target_table}: {result['nuevos']} nuevos", "sistema")
+        if not filas:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No se encontraron filas válidas. Verifica que el archivo sea el informe "
+                    "de liquidaciones con encabezados en la fila 4 "
+                    "(Escritura; Nir; Responsable; Gobernacion; ...)."
+                )
+            )
 
-        return {
-            "status": "ok",
-            "import_result": result,
-            "csv_preview": csv_text.splitlines()[:5],
-            "target_table": target_table,
-        }
+        # ── Upsert en Supabase ────────────────────────────────────────────────
+        # Ajusta la función/tabla según tu proyecto
+        result = import_liq_from_rows(filas, batch_size=200)
+        result['omitidas_sin_escritura'] = omitidas_sin_escritura
+
+        try:
+            insert_log(
+                "import_liq",
+                f"Archivo {file.filename}: {result.get('nuevos', '?')} nuevos, "
+                f"{omitidas_sin_escritura} filas omitidas (sin escritura/encabezado)",
+                "sistema"
+            )
+        except Exception:
+            pass
+
+        return {"status": "ok", "import_result": result}
+
     except HTTPException:
         raise
     except Exception as e:
-        insert_log("import_excel_error", str(e), "sistema", "error")
-        raise HTTPException(status_code=500, detail=f"Error al procesar archivo: {str(e)}")
-
-# ========================
-# NUEVOS ENDPOINTS PARA DESCARGAS Y ENVÍOS
-# ========================
-
-@app.post("/api/descargas/guardar")
-async def guardar_descarga_endpoint(
-    tipo: str,
-    escritura: str,
-    file: UploadFile = File(...),
-    email: str = None
-):
-    try:
-        if tipo not in ['recibo', 'certificado']:
-            raise HTTPException(status_code=400, detail="Tipo debe ser 'recibo' o 'certificado'")
-        
-        contenido = await file.read()
-        resultado = guardar_descarga(
-            tipo=tipo,
-            escritura=escritura,
-            archivo_nombre=file.filename,
-            archivo_contenido=contenido,
-            email=email
-        )
-        insert_log("guardar_descarga", f"{tipo} {escritura} guardado: {file.filename}", "sistema")
-        return {
-            "status": "ok",
-            "descarga_id": resultado.data[0]['id'] if resultado.data else None,
-            "mensaje": f"{tipo.capitalize()} guardado exitosamente"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        insert_log("guardar_descarga_error", str(e), "sistema", "error")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/descargas/{escritura}")
 def obtener_descargas(escritura: str, tipo: str = None):

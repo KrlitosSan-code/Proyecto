@@ -3165,7 +3165,7 @@ async function handleExcelFile(file) {
   formData.append('table', 'liq');  // Por defecto tabla liq
   
   try {
-    const response = await fetch('/api/import/excel', {
+    const response = await fetch('/api/liq/import', {
       method: 'POST',
       body: formData
     });
@@ -3178,7 +3178,7 @@ async function handleExcelFile(file) {
     }
     
     const result = data.import_result;
-    const mensaje = ` Importación completada: ${result.nuevos} nuevos, ${result.duplicados} duplicados`;
+    const mensaje = `Importación completada: ${result.nuevos} nuevos, ${result.actualizados} actualizados`;
     showNotif(mensaje, 'success');
     
     // Recargar registros desde servidor

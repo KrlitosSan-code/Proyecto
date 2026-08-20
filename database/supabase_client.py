@@ -93,8 +93,66 @@ def obtener_descargas_pendientes_de_envio(*args: Any, **kwargs: Any) -> list:
 def marcar_descarga_como_enviada(*args: Any, **kwargs: Any) -> dict:
     return {"ok": True}
 
-def import_liq_from_rows(*args: Any, **kwargs: Any) -> dict:
-    return {"nuevos": 0, "actualizados": 0}
+def import_liq_from_rows(rows: list, batch_size: int = 200) -> dict:
+    """
+    Importa filas de liquidación (Informe_Not_38_Liq) a la tabla 'liq_2026'.
+    
+    - Clave única: escritura (una liquidación por escritura).
+    - Si ya existe una fila para esa escritura → UPDATE (upsert).
+    - Si no existe → INSERT.
+    """
+    db = get_supabase()
+    if not db:
+        raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
+
+    try:
+        escrituras = list({r['escritura'] for r in rows if r.get('escritura') is not None})
+
+        # Consultar cuáles escrituras ya existen en la tabla
+        existentes = set()
+        for i in range(0, len(escrituras), 200):
+            chunk = escrituras[i:i + 200]
+            resp = db.table('liq').select('escritura').in_('escritura', chunk).execute()
+            for e in (resp.data or []):
+                existentes.add(e['escritura'])
+
+        a_insertar = []
+        a_actualizar = []
+
+        for r in rows:
+            esc = r.get('escritura')
+            if esc in existentes:
+                a_actualizar.append(r)
+            else:
+                a_insertar.append(r)
+                existentes.add(esc)  # evitar duplicados dentro del mismo archivo
+
+        # INSERT en lotes
+        nuevos = 0
+        for i in range(0, len(a_insertar), batch_size):
+            batch = a_insertar[i:i + batch_size]
+            if batch:
+                db.table('liq').insert(batch).execute()
+                nuevos += len(batch)
+
+        # UPDATE en lotes (upsert por escritura)
+        actualizados = 0
+        for r in a_actualizar:
+            db.table('liq') \
+              .update({k: v for k, v in r.items() if k != 'escritura'}) \
+              .eq('escritura', r['escritura']) \
+              .execute()
+            actualizados += 1
+
+        return {
+            "nuevos":      nuevos,
+            "actualizados": actualizados,
+            "total":       nuevos + actualizados,
+        }
+
+    except Exception as e:
+        print(f"Error en import_liq_from_rows: {e}")
+        raise
 
 def import_pagos_from_rows(*args: Any, **kwargs: Any) -> dict:
     return {"nuevos": 0, "actualizados": 0}
@@ -561,7 +619,6 @@ def get_table_rows(table_name: str, limit: int = 1000, page: int = 1, sort_by: s
     except Exception:
         return type('obj', (object,), {'data': []})()
 
-
 def get_responsables() -> list[str]:
     db = get_supabase()
     if not db:
@@ -576,7 +633,6 @@ def get_responsables() -> list[str]:
         return valid or DEFAULT_RESPONSABLES
     except Exception:
         return DEFAULT_RESPONSABLES
-
 
 def upsert_responsable(nombre: str) -> list[str]:
     nombre = (nombre or '').strip()
