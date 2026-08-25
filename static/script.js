@@ -1000,12 +1000,14 @@ async function enviarAPendientes(esc) {
   }
 
   reg.notificacion = 'enviado';
+  reg.pago = 'pendiente';
   reg.estado_ctl = 'pendiente';
   reg.fecha_proceso = null;
 
   try {
     await updateRegistroOnServer(escNorm, {
       notificacion: reg.notificacion,
+      pago: reg.pago,
       estado_ctl: reg.estado_ctl,
       fecha_proceso: reg.fecha_proceso,
     });
