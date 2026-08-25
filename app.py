@@ -387,10 +387,6 @@ def start_descarga_certificados():
         pass
     return {"job_id": job_id}
 
-
-if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False, access_log=False)
-
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
     job = JOBS.get(job_id)
@@ -986,7 +982,7 @@ def generar_informe_pagos(fecha_pago: Optional[str] = None):
             </div>
             <div class="header-container">
                 <div class="header-logo" style="flex: 1; text-align: left;">
-                    <img src="/static/logo.jpg" alt="Logo Notaría" />
+                    <img src="/static/logo.jpeg" alt="Logo Notaría" />
                 </div>
                 <div  style="flex: 2; text-align: center; margin: 0;">
                     <span style="font-size: 26px; display: block;">INFORME GENERAL DE PAGOS</span>
@@ -1038,7 +1034,6 @@ def generar_informe_pagos(fecha_pago: Optional[str] = None):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     
 def normalizar_escritura(esc):
     """Limpia la escritura removiendo caracteres no numéricos y ceros a la izquierda."""
@@ -1375,7 +1370,6 @@ def start_envio_recibo_unico(body: dict):
     t.start()
     return {"job_id": job_id}
 
-
 def _run_envio_certificados_job(job_id: str):
     try:
         JOBS[job_id]["status"] = "running"
@@ -1569,7 +1563,6 @@ async def import_liq_file(file: UploadFile = File(...), anio: int = 2026):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/api/descargas/{escritura}")
 def obtener_descargas(escritura: str, tipo: str = None):
     try:
@@ -1726,4 +1719,6 @@ def download_liq_backup():
     except Exception as e:
         insert_log('download_liq_error', str(e), 'sistema', 'error')
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+if __name__ == "__main__":
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False, access_log=False)
