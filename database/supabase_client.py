@@ -1,11 +1,51 @@
 import os
 import re
+import re
 from typing import Any, Optional, List
 from datetime import datetime
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _normalize_date_value(value: Any) -> Any:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+
+    match = re.match(r'^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$', s)
+    if match:
+        day, month, year = match.groups()
+        year = year if len(year) == 4 else f"20{year}"
+        try:
+            return datetime(int(year), int(month), int(day)).date().isoformat()
+        except ValueError:
+            pass
+
+    try:
+        dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+        return dt.date().isoformat()
+    except Exception:
+        pass
+
+    try:
+        return datetime.strptime(s, '%d/%m/%y').date().isoformat()
+    except Exception:
+        pass
+
+    return s
+
+
+def _normalize_date_fields(body: dict) -> dict:
+    if not isinstance(body, dict):
+        return body
+    for field in ['fecha_proceso', 'fecha_pago', 'fecha_acta']:
+        if field in body and body[field] is not None:
+            body[field] = _normalize_date_value(body[field])
+    return body
 
 _SUPABASE_CLIENT: Optional[Any] = None
 
@@ -16,6 +56,18 @@ DEFAULT_RESPONSABLES = [
     "Cancelación",
     "Bancolombia",
     "Sui Loft",
+]
+
+DEFAULT_GOBERNACIONES = [
+    "cundinamarca",
+    "bolivar",
+    "tolima",
+    "boyaca",
+    "santander",
+    "atlantico",
+    "antioquia",
+    "magdalena",
+    "meta",
 ]
 
 
@@ -166,6 +218,7 @@ def insert_liq_row(row: dict) -> Any:
     if not db:
         raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
 
+    row = _normalize_date_fields(dict(row))
     table_name = resolve_liq_table_name(db)
     try:
         response = db.table(table_name).insert(row).execute()
@@ -179,6 +232,7 @@ def update_liq_row(escritura: str, row: dict) -> Any:
     if not db:
         raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
 
+    row = _normalize_date_fields(dict(row))
     table_name = resolve_liq_table_name(db)
     try:
         response = db.table(table_name).update(row).eq('escritura', escritura).execute()
@@ -295,7 +349,7 @@ def move_liq_to_table(escritura: str, target: str = None) -> dict:
         if not response.data:
             return {"ok": False, "message": "Registro no encontrado"}
         
-        record = response.data[0]
+        record = _normalize_date_fields(dict(response.data[0]))
         
         # Insertar en la tabla destino
         db.table(target).insert(record).execute()
@@ -403,6 +457,8 @@ def insert_acta(row: dict) -> Any:
             existente = db.table('pagos_2026').select('escritura').eq('escritura', escritura).execute()
             if not existente.data:
                 db.table('pagos_2026').insert({'escritura': escritura, 'vr_ben': 0, 'vr_reg': 0}).execute()
+            if _table_exists(db, 'liq'):
+                sync_liq_estado_from_actas(escritura, True)
 
         return response
     except Exception as e:
@@ -447,7 +503,18 @@ def update_acta(acta_id: int, row: dict) -> Any:
         payload = {k: v for k, v in row.items() if k in allowed_fields}
         if not payload:
             raise Exception("No hay campos válidos para actualizar.")
+
+        escritura_actual = None
+        if 'escritura' in payload:
+            escritura_actual = payload['escritura']
+        else:
+            acta_actual = db.table('actas').select('escritura').eq('id', acta_id).execute()
+            if acta_actual.data:
+                escritura_actual = acta_actual.data[0].get('escritura')
+
         response = db.table('actas').update(payload).eq('id', acta_id).execute()
+        if escritura_actual is not None and _table_exists(db, 'liq'):
+            sync_liq_estado_from_actas(escritura_actual, True)
         return response
     except Exception as e:
         print(f"Error en update_acta: {e}")
@@ -460,7 +527,16 @@ def delete_acta(acta_id: int) -> Any:
         raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
 
     try:
+        acta_actual = db.table('actas').select('escritura').eq('id', acta_id).execute()
+        escritura = None
+        if acta_actual.data:
+            escritura = acta_actual.data[0].get('escritura')
+
         response = db.table('actas').delete().eq('id', acta_id).execute()
+        if escritura is not None:
+            restantes = db.table('actas').select('id').eq('escritura', escritura).execute()
+            if _table_exists(db, 'liq'):
+                sync_liq_estado_from_actas(escritura, bool((restantes.data or [])))
         return response
     except Exception as e:
         print(f"Error en delete_acta: {e}")
@@ -648,3 +724,47 @@ def upsert_responsable(nombre: str) -> list[str]:
         return get_responsables()
     except Exception:
         return get_responsables()
+
+
+def get_gobernaciones() -> list[str]:
+    db = get_supabase()
+    if not db:
+        return DEFAULT_GOBERNACIONES
+    try:
+        if not _table_exists(db, 'gobernaciones'):
+            return DEFAULT_GOBERNACIONES
+        response = db.table('gobernaciones').select('*').order('nombre').execute()
+        items = response.data or []
+        values = [str(item.get('nombre') or item.get('gobernacion') or '').strip() for item in items]
+        valid = [v for v in values if v]
+        return valid or DEFAULT_GOBERNACIONES
+    except Exception:
+        return DEFAULT_GOBERNACIONES
+
+
+def upsert_gobernacion(nombre: str) -> list[str]:
+    nombre = (nombre or '').strip()
+    if not nombre:
+        return get_gobernaciones()
+    db = get_supabase()
+    if not db:
+        return get_gobernaciones()
+    try:
+        if not _table_exists(db, 'gobernaciones'):
+            return get_gobernaciones()
+        db.table('gobernaciones').upsert({'nombre': nombre}, on_conflict='nombre').execute()
+        return get_gobernaciones()
+    except Exception:
+        return get_gobernaciones()
+
+
+def sync_liq_estado_from_actas(escritura: str, has_acta: bool) -> dict:
+    db = get_supabase()
+    if not db:
+        return {'ok': False, 'pago': 'procesar' if has_acta else 'pendiente'}
+    try:
+        payload = {'pago': 'procesar' if has_acta else 'pendiente'}
+        response = db.table('liq').update(payload).eq('escritura', escritura).execute()
+        return {'ok': True, 'pago': payload['pago'], 'updated': getattr(response, 'data', [])}
+    except Exception:
+        return {'ok': False, 'pago': 'procesar' if has_acta else 'pendiente'}

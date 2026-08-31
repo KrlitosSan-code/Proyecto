@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from database.supabase_client import delete_acta, get_acta_by_id, get_actas_by_escritura, get_pagos_2026_resumen, get_responsables, get_supabase, import_pagos_from_rows, insert_acta, insert_log, update_acta, upsert_pago_2026, upsert_responsable
+from database.supabase_client import delete_acta, get_acta_by_id, get_actas_by_escritura, get_gobernaciones, get_pagos_2026_resumen, get_responsables, get_supabase, import_pagos_from_rows, insert_acta, insert_log, update_acta, upsert_pago_2026, upsert_responsable, upsert_gobernacion
 from repositories.liq_repository import LiqRepository
 from services.workflow_service import WorkflowService
 
@@ -1122,6 +1122,27 @@ def create_responsable(payload: dict):
         raise
     except Exception as e:
         insert_log('guardar_responsable', str(e), 'sistema', 'error')
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get('/api/gobernaciones')
+def get_gobernaciones_api():
+    try:
+        return get_gobernaciones()
+    except Exception as e:
+        insert_log('consulta_gobernaciones', str(e), 'sistema', 'error')
+        return []
+
+@app.post('/api/gobernaciones')
+def create_gobernacion(payload: dict):
+    try:
+        nombre = str(payload.get('nombre') or payload.get('gobernacion') or '').strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail='Falta el nombre de la gobernación')
+        return {"status": "ok", "gobernaciones": upsert_gobernacion(nombre)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        insert_log('guardar_gobernacion', str(e), 'sistema', 'error')
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/liq")

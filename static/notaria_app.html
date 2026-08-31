@@ -105,13 +105,7 @@
           style="flex: 1; min-width: 250px;"
           oninput="aplicarFiltroGlobal()"
       >
-      <select class="select-filter" id="global-filter-estado" onchange="aplicarFiltroGlobal()">
-          <option value="">Registro Pendiente / Procesar</option>
-          <option value="pendiente">Pendiente</option>
-          <option value="enviado">Enviado</option>
-          <option value="ingresado">Ingresado</option>
-          <option value="procesando">Procesando</option>
-      </select>
+      
       <button class="btn btn-secondary btn-sm" onclick="limpiarFiltros()">Limpiar <i class="fa-solid fa-feather"></i></button>
       <span id="global-contador" style="font-size: 13px; color: #64748b; font-weight: 500; white-space: nowrap;">
           Mostrando 0 registros
@@ -200,10 +194,28 @@
       <div class="section-title">Registros</div>
       <!-- inputs ocultos para compatibilidad con getFiltered() que los lee con || {value:''} -->
       <input type="hidden" id="search-input">
-      <input type="hidden" id="filter-notificacion">
-      <input type="hidden" id="filter-pago">
-      <input type="hidden" id="filter-estado">
-      <input type="hidden" id="filter-gob">
+
+      <div class="toolbar" style="margin-bottom: 12px; flex-wrap: wrap;">
+        <select class="select-filter" id="filter-notificacion" onchange="renderTable()">
+          <option value="">Notificación</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="enviado">Enviado</option>
+        </select>
+        <select class="select-filter" id="filter-pago" onchange="renderTable()">
+          <option value="">Pago</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="ingresado">Ingresado</option>
+        </select>
+        <select class="select-filter" id="filter-estado" onchange="renderTable()">
+          <option value="">Estado CTL</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="enviado">Enviado</option>
+          <option value="procesando">Procesando</option>
+        </select>
+        <select class="select-filter" id="filter-gob" onchange="renderTable()">
+          <option value="">Gobernación</option>
+        </select>
+      </div>
 
       <div class="table-wrap">
         <div class="table-header-bar">
@@ -240,7 +252,16 @@
       <div class="section-title">Pendientes <i class="fa-solid fa-file"></i></div>
       <!-- inputs ocultos para compatibilidad con getFilteredPendientes() -->
       <input type="hidden" id="search-pendientes">
-      <input type="hidden" id="filter-pago-pendientes">
+      <div class="toolbar" style="margin-bottom: 12px; flex-wrap: wrap;">
+        <select class="select-filter" id="filter-pago-pendientes" onchange="renderPendientes()">
+          <option value="">Pago</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="ingresado">Ingresado</option>
+        </select>
+        <select class="select-filter" id="filter-pend-gob" onchange="renderPendientes()">
+          <option value="">Gobernación</option>
+        </select>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -266,7 +287,17 @@
       <div class="section-title">Procesar <i class="fa-solid fa-file"></i></div>
       <!-- inputs ocultos para compatibilidad con getFilteredProcesados() -->
       <input type="hidden" id="search-procesados">
-      <input type="hidden" id="filter-estado-procesados">
+      <div class="toolbar" style="margin-bottom: 12px; flex-wrap: wrap;">
+        <select class="select-filter" id="filter-estado-procesados" onchange="renderProcesados()">
+          <option value="">Estado CTL</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="enviado">Enviado</option>
+          <option value="procesando">Procesando</option>
+        </select>
+        <select class="select-filter" id="filter-proc-gob" onchange="renderProcesados()">
+          <option value="">Gobernación</option>
+        </select>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -575,19 +606,12 @@
         </div>        
         <div class="form-group">
           <label class="form-label">Gobernación</label>
-          <select class="form-select" id="add-gob">
-            <option value="cundinamarca">Cundinamarca</option>
-            <option value="bolivar">Bolívar</option>
-            <option value="tolima">Tolima</option>
-            <option value="boyaca">Boyacá</option>
-            <option value="santander">Santander</option>
-            <option value="atlantico">Atlántico</option>
-            <option value="antioquia">Antioquia</option>
-            <option value="magdalena">Magdalena</option>
-            <option value="meta">Meta</option>
-            <option value="">— sin gobernación —</option>
-          </select>
-        </div>        
+          <div style="display:flex; gap:8px; align-items:center;">
+            <select class="form-select" id="add-gob" style="flex:1"></select>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="agregarGobernacionDesdePrompt()">+ Nueva</button>
+          </div>
+        </div>
+        <datalist id="gobernaciones-list"></datalist>
         <div class="form-group">
           <label class="form-label">Pago</label>
           <select class="form-select" id="add-pago">

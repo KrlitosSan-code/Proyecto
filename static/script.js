@@ -185,6 +185,31 @@ function formatDateCO(date) {
   return `${day}/${month}/${year}`;
 }
 
+function formatDateForServer(dateValue) {
+  if (dateValue === null || dateValue === undefined || dateValue === '') return null;
+
+  if (typeof dateValue === 'string') {
+    const text = dateValue.trim();
+    if (!text) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+    const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (match) {
+      const [, day, month, yearRaw] = match;
+      const year = yearRaw.length === 4 ? yearRaw : `20${yearRaw}`;
+      const safeDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+      if (!Number.isNaN(safeDate.getTime())) return safeDate.toISOString().slice(0, 10);
+    }
+
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+
+  const parsed = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
 function compareRows(a, b) {
   const fa = normalizeSortValue(a[sortField]);
   const fb = normalizeSortValue(b[sortField]);
@@ -459,11 +484,12 @@ function getFilteredPendientes() {
   const qEl = document.getElementById('search-pendientes') || { value: '' };
   const q = String(qEl.value || '').trim().toLowerCase();
   const fP = (document.getElementById('filter-pago-pendientes') || {value:''}).value;
+  const fG = (document.getElementById('filter-pend-gob') || {value:''}).value;
   let rows = REGISTROS.filter(r => {
     const notificacion = normalizar(r.notificacion);
     const pago = normalizar(r.pago);
     const estado_ctl = normalizar(r.estado_ctl);
-    return notificacion === 'enviado' && estado_ctl === 'pendiente' && pago === 'pendiente';
+    return notificacion === 'enviado' && pago !== 'ingresado' && estado_ctl !== 'enviado' && estado_ctl !== 'procesando';
   });
   if (q) {
     const qNorm = q.normalize('NFD').replace(/[-]/g, '');
@@ -475,6 +501,7 @@ function getFilteredPendientes() {
     });
   }
   if (fP) rows = rows.filter(r => normalizar(r.pago) === fP);
+  if (fG) rows = rows.filter(r => normalizar(r.gobernacion) === fG);
   rows.sort(compareRows);
   return rows;
 }
@@ -483,6 +510,7 @@ function getFilteredProcesados() {
   const qEl = document.getElementById('search-procesados') || { value: '' };
   const q = String(qEl.value || '').trim().toLowerCase();
   const fE = (document.getElementById('filter-estado-procesados') || {value:''}).value;
+  const fG = (document.getElementById('filter-proc-gob') || {value:''}).value;
   let rows = REGISTROS.filter(r => {
     return normalizar(r.pago) === 'ingresado' && normalizar(r.notificacion) === 'enviado' && normalizar(r.estado_ctl) !== 'enviado';
   }); 
@@ -496,6 +524,7 @@ function getFilteredProcesados() {
     });
   }
   if (fE) rows = rows.filter(r => normalizar(r.estado_ctl) === fE);
+  if (fG) rows = rows.filter(r => normalizar(r.gobernacion) === fG);
   rows.sort(compareRows);
   return rows;
 }
@@ -960,6 +989,63 @@ async function cargarResponsables() {
   }
 }
 
+async function cargarGobernaciones() {
+  const defaults = ['cundinamarca', 'bolivar', 'tolima', 'boyaca', 'santander', 'atlantico', 'antioquia', 'magdalena', 'meta'];
+  try {
+    const response = await fetch('/api/gobernaciones');
+    let items = defaults;
+    if (response.ok) {
+      const data = await response.json();
+      const list = Array.isArray(data) ? data : Array.isArray(data.gobernaciones) ? data.gobernaciones : [];
+      const values = list.map(v => String(v || '').trim()).filter(Boolean).map(v => normalizar(v));
+      if (values.length) items = values;
+    }
+    GOBERNACIONES = [...new Set(items.map(v => normalizar(v)).filter(Boolean))];
+  } catch (e) {
+    GOBERNACIONES = [...new Set(defaults.map(v => normalizar(v)).filter(Boolean))];
+  }
+
+  const addSelect = document.getElementById('add-gob');
+  if (addSelect) {
+    addSelect.innerHTML = '<option value="">— sin gobernación —</option>' + GOBERNACIONES.map(g => `<option value="${g}">${capFirst(g)}</option>`).join('');
+    const currentValue = addSelect.dataset.value || '';
+    if (currentValue && GOBERNACIONES.includes(normalizar(currentValue))) addSelect.value = normalizar(currentValue);
+  }
+
+  const detailSelect = document.getElementById('detail-gobernacion');
+  if (detailSelect) {
+    detailSelect.innerHTML = '<option value="">— sin gobernación —</option>' + GOBERNACIONES.map(g => `<option value="${g}">${capFirst(g)}</option>`).join('');
+    const current = detailSelect.dataset.value || '';
+    if (current && GOBERNACIONES.includes(normalizar(current))) detailSelect.value = normalizar(current);
+  }
+
+  const datalist = document.getElementById('gobernaciones-list');
+  if (datalist) {
+    datalist.innerHTML = GOBERNACIONES.map(g => `<option value="${g}"></option>`).join('');
+  }
+}
+
+async function agregarGobernacionDesdePrompt() {
+  const nombre = prompt('Nombre de la nueva gobernación:', '');
+  if (!nombre) return;
+  const valor = normalizar(nombre);
+  if (!valor) return;
+  try {
+    const response = await fetch('/api/gobernaciones', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre: valor })
+    });
+    if (!response.ok) throw new Error('No se pudo guardar la gobernación');
+    await cargarGobernaciones();
+    const addSelect = document.getElementById('add-gob');
+    if (addSelect) addSelect.value = valor;
+    showNotif(`Gobernación ${capFirst(valor)} guardada`, 'success');
+  } catch (e) {
+    showNotif(e.message, 'error');
+  }
+}
+
 function registrarNuevoResponsable(nombreResponsable) {
     if (!nombreResponsable) return;
     const datalist = document.getElementById('opciones-responsable');
@@ -1230,25 +1316,18 @@ function actualizarUI() {
   const fpr = document.getElementById('filter-proc-gob');
   const fmg = document.getElementById('filter-mail-gob');
   const gfg = document.getElementById('global-filter-gob');
-  if (fg) {
-    fg.innerHTML = '<option value="">Gobernaciones</option>' +
-      gobs.map(g=>`<option value="${g}">${capFirst(g)}</option>`).join('');
-  }
-  if (fpg) {
-    fpg.innerHTML = '<option value="">Gobernaciones</option>' +
-      gobs.map(g=>`<option value="${g}">${capFirst(g)}</option>`).join('');
-  }
-  if (fpr) {
-    fpr.innerHTML = '<option value="">Gobernaciones</option>' +
-      gobs.map(g=>`<option value="${g}">${capFirst(g)}</option>`).join('');
-  }
-  if (fmg) {
-    fmg.innerHTML = '<option value="">Gobernaciones</option>' +
-      gobs.map(g=>`<option value="${g}">${capFirst(g)}</option>`).join('');
-  }
-  if (gfg) {
-    gfg.innerHTML = '<option value="">Gobernaciones</option>' + gobs.map(g=>`<option value="${g}">${capFirst(g)}</option>`).join('');
-  }
+  const options = [...new Set([...GOBERNACIONES, ...gobs])].filter(Boolean);
+  const renderGovOptions = (sel) => {
+    if (!sel) return;
+    const current = sel.value || '';
+    sel.innerHTML = '<option value="">Gobernaciones</option>' + options.map(g => `<option value="${g}">${capFirst(g)}</option>`).join('');
+    if (current && options.includes(normalizar(current))) sel.value = normalizar(current);
+  };
+  if (fg) renderGovOptions(fg);
+  if (fpg) renderGovOptions(fpg);
+  if (fpr) renderGovOptions(fpr);
+  if (fmg) renderGovOptions(fmg);
+  if (gfg) renderGovOptions(gfg);
 
   renderTable();
   renderDashTable();
@@ -1285,6 +1364,7 @@ function pagoBadge(pago) {
   const p = normalizar(pago);
   if (p === 'ingresado') return `<span class="badge badge-ingresado">Ingresado</span>`;
   if (p === 'pendiente') return `<span class="badge badge-pendiente">Pendiente</span>`;
+  if (p === 'procesar') return `<span class="badge badge-procesando">Procesar</span>`;
   return `<span class="badge">${capFirst(pago||'—')}</span>`;
 }
 
@@ -2058,6 +2138,11 @@ async function updateRegistroOnServer(esc, payload) {
   const allowed = ['escritura','nir','correo','notificacion','pago','estado_ctl','gobernacion','devolucion','escritura_str','fecha_proceso'];
   const body = Object.fromEntries(Object.entries(payload).filter(([k]) => allowed.includes(k)));
 
+  if (Object.prototype.hasOwnProperty.call(body, 'fecha_proceso') && body.fecha_proceso !== null && body.fecha_proceso !== undefined && body.fecha_proceso !== '') {
+    const normalized = formatDateForServer(body.fecha_proceso);
+    if (normalized) body.fecha_proceso = normalized;
+  }
+
   const response = await fetch(`/api/liq/${encodeURIComponent(esc)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -2514,6 +2599,7 @@ function exportarCSV() {
 // ================================================================
 let PAGOS2026 = [];
 let PAGOS2026_EDITING_ACTA_ID = null;
+let GOBERNACIONES = [];
 
 function formatCOP(v) {
   const n = Number(v) || 0;
@@ -3288,6 +3374,8 @@ async function fetchServerData() {
 document.addEventListener('DOMContentLoaded', () => {
   // Inicializar UI y eventos
   cargarDashboardStatus();
+  cargarResponsables();
+  cargarGobernaciones();
   actualizarUI();
   renderCurrentView();
   // Cargar datos del servidor
