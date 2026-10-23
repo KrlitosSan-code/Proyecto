@@ -50,7 +50,7 @@
         <span class="sidebar-count" id="sb-proc">0</span>
       </div>
       <div class="sidebar-item" onclick="setView('liq2025', this); closeSidebarOnMobile()">
-        <span class="icon"><i class="fa fa-table"></i></span><span class="label">liq_2025</span>
+        <span class="icon"><i class="fa fa-table"></i></span><span class="label">Ventanilla</span>
         <span class="sidebar-count" id="sb-liq2025">0</span>
       </div>
       <div class="sidebar-item" onclick="setView('liq2026', this); closeSidebarOnMobile()">
@@ -211,6 +211,7 @@
           <div style="display:flex;gap:6px;">
             <button class="btn btn-ghost btn-sm" onclick="seleccionarTodos()"><i class="fas fa-check-square"></i> Seleccionar todos</button>
             <button class="btn btn-warning btn-sm" onclick="procesarSeleccionados()"><i class="fas fa-cogs"></i> Procesar seleccionados</button>
+            <button class="btn btn-secondary btn-sm" onclick="abrirInforme('registros')"><i class="fa fa-print"></i> Informe</button>
           </div>
         </div>
         <table>
@@ -241,6 +242,7 @@
       <!-- inputs ocultos para compatibilidad con getFilteredPendientes() -->
       <input type="hidden" id="search-pendientes">
       <input type="hidden" id="filter-pago-pendientes">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-secondary btn-sm" onclick="abrirInforme('pendientes')"><i class="fa fa-print"></i> Informe</button></div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -267,11 +269,12 @@
       <!-- inputs ocultos para compatibilidad con getFilteredProcesados() -->
       <input type="hidden" id="search-procesados">
       <input type="hidden" id="filter-estado-procesados">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-secondary btn-sm" onclick="abrirInforme('procesar')"><i class="fa fa-print"></i> Informe</button></div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Escritura</th><th>NIR</th><th>Correo</th><th onclick="sortBy('estado_ctl')">Estado Ctl</th><th>Fecha Proceso</th><th>Docs</th><th>Acciones</th>
+              <th>Escritura</th><th>NIR</th><th>Correo</th><th>Estado CTL</th><th>Origen</th><th>Fecha Proceso</th><th>Cola</th>
             </tr>
           </thead>
           <tbody id="proc-table-body"></tbody>
@@ -280,20 +283,22 @@
       <div class="pagination-bar" id="pagination-procesados"></div>
     </div>
 
-    <!-- LIQ_2025 -->
+    <!-- VENTANILLA (tabla liq_2025) -->
     <div id="view-liq2025" class="view fade-in">
-      <div class="section-title">liq_2025 <i class="fa-solid fa-table"></i></div>
+      <div class="section-title">Ventanilla <i class="fa-solid fa-table"></i></div>
       <div class="toolbar">
         <div class="search-box">
           <input type="text" placeholder="Buscar..." id="search-liq2025" oninput="renderLiqTable('liq_2025')">
         </div>
         <button class="btn btn-secondary btn-sm" onclick="limpiarFiltrosLiq('liq2025')">Limpiar <i class="fa-solid fa-feather"></i></button>
+        <button class="btn btn-secondary btn-sm" onclick="abrirGestionCatalogos()"><i class="fa fa-list-check"></i> Agregar estado</button>
+        <button class="btn btn-secondary btn-sm" onclick="abrirInforme('ventanilla')"><i class="fa fa-print"></i> Informe</button>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Escritura</th><th>NIR</th><th>Correo</th><th>Notificación</th><th>Pago</th><th>Estado CTL</th><th>Gobernación</th><th>Fecha Proceso</th><th>Acciones</th>
+              <th>Escritura</th><th>NIR</th><th>Correo</th><th>Notificación</th><th>Pago</th><th>Estado CTL</th><th>Gobernación</th><th>Fecha Proceso</th><th>Flujo</th>
             </tr>
           </thead>
           <tbody id="liq2025-table-body"></tbody>
@@ -310,6 +315,7 @@
           <input type="text" placeholder="Buscar..." id="search-liq2026" oninput="renderLiqTable('liq_2026')">
         </div>
         <button class="btn btn-secondary btn-sm" onclick="limpiarFiltrosLiq('liq2026')">Limpiar <i class="fa-solid fa-feather"></i></button>
+        <button class="btn btn-secondary btn-sm" onclick="abrirInforme('liq_2026')"><i class="fa fa-print"></i> Informe</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -351,8 +357,21 @@
         </div>
         <!-- CONTROLES PARA GENERAR INFORME DE PAGO -->
         <div style="display:flex; align-items:center; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="abrirInforme('pagos2026')"><i class="fa fa-print"></i> Informe filtrado</button>
           <label for="fecha-informe-pago" style="font-size:12px; font-weight:500;">Fecha Pago:</label>
           <input type="date" id="fecha-informe-pago" class="select-filter" style="padding: 4px 8px;">
+          <label for="gobernacion-informe-pago" style="font-size:12px; font-weight:500;">Gobernación:</label>
+          <select id="gobernacion-informe-pago" class="select-filter" style="padding: 4px 8px;">
+            <option value="todas">Todas, agrupadas</option>
+            <option value="cundinamarca">Cundinamarca</option>
+            <option value="bolivar">Bolívar</option>
+            <option value="tolima">Tolima</option>
+            <option value="boyaca">Boyacá</option>
+            <option value="santander">Santander</option>
+            <option value="atlantico">Atlántico</option>
+            <option value="antioquia">Antioquia</option>
+            <option value="magdalena">Magdalena</option>
+          </select>
           <button class="btn btn-secondary btn-sm" onclick="generarInformePagos()">
             <i class="fa fa-print"></i> Generar Informe
           </button>
@@ -384,7 +403,7 @@
           <div class="stat-value" id="stat-table-liq">0</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Total liq_2025</div>
+          <div class="stat-label">Total Ventanilla</div>
           <div class="stat-value" id="stat-table-liq2025">0</div>
         </div>
         <div class="stat-card">
@@ -507,7 +526,7 @@
 
 <!-- MODAL: DETALLE REGISTRO -->
 <div class="modal-overlay" id="modal-detalle">
-  <div class="modal">
+  <div class="modal" style="max-width:980px;max-height:92vh;overflow:auto">
     <div class="modal-header">
       <div>
         <div class="modal-title" id="modal-escritura-title">Escritura</div>
@@ -523,6 +542,24 @@
       </div>
       <div id="modal-tab-info">
         <div class="detail-grid" id="detail-info-grid"></div>
+        <div class="section-title" style="font-size:14px;margin-top:18px">Pagos y actas</div>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="detail-key">Liquidación</div><div class="detail-val"><input class="form-input" id="detail-pago-liquidacion"></div></div>
+          <div class="detail-item"><div class="detail-key">Beneficencia</div><div class="detail-val"><input class="form-input" id="detail-pago-vrben" type="number" min="0"></div></div>
+          <div class="detail-item"><div class="detail-key">Registro</div><div class="detail-val"><input class="form-input" id="detail-pago-vrreg" type="number" min="0"></div></div>
+          <div class="detail-item"><div class="detail-key">Fecha de pago</div><div class="detail-val"><input class="form-input" id="detail-pago-fecha" type="date"></div></div>
+          <div class="detail-item" style="grid-column:1/-1"><div class="detail-key">Observaciones de pago</div><div class="detail-val"><input class="form-input" id="detail-pago-obs"></div></div>
+        </div>
+        <div id="detail-pago-resumen" style="margin:10px 0;padding:10px;background:var(--bg-soft,#f5f7fa);font-size:13px"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">
+          <div class="table-title-sm">Actas asociadas</div>
+          <button class="btn btn-secondary btn-sm" onclick="abrirActaDesdeDetalle()"><i class="fa fa-plus"></i> Agregar acta</button>
+        </div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Acta</th><th>Fecha</th><th>Tipo de depósito</th><th>Valor</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody id="detail-actas-body"><tr><td colspan="5" style="text-align:center;color:var(--muted)">Cargando actas...</td></tr></tbody>
+          </table>
+        </div>
       </div>
       <div id="modal-tab-documentos" style="display:none">
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('detail-doc-file-input').click()"><i class="fa fa-upload"></i>Adjuntar archivo local</button>
@@ -568,45 +605,23 @@
         </div>
         <div class="form-group">
           <label class="form-label">Notificación</label>
-          <select class="form-select" id="add-notif">
-            <option value="pendiente">Pendiente</option>
-            <option value="enviado">Enviado</option>
-          </select>
+          <input class="form-input" id="add-notif" list="catalogo-notificacion" value="pendiente">
         </div>        
         <div class="form-group">
           <label class="form-label">Gobernación</label>
-          <select class="form-select" id="add-gob">
-            <option value="cundinamarca">Cundinamarca</option>
-            <option value="bolivar">Bolívar</option>
-            <option value="tolima">Tolima</option>
-            <option value="boyaca">Boyacá</option>
-            <option value="santander">Santander</option>
-            <option value="atlantico">Atlántico</option>
-            <option value="antioquia">Antioquia</option>
-            <option value="magdalena">Magdalena</option>
-            <option value="meta">Meta</option>
-            <option value="">— sin gobernación —</option>
-          </select>
+          <input class="form-input" id="add-gob" list="catalogo-gobernacion" placeholder="Escriba o seleccione una gobernación">
         </div>        
         <div class="form-group">
           <label class="form-label">Pago</label>
-          <select class="form-select" id="add-pago">
-            <option value="pendiente">Pendiente</option>
-            <option value="ingresado">Ingresado</option>
-          </select>
+          <input class="form-input" id="add-pago" list="catalogo-pago" value="pendiente">
         </div>
         <div class="form-group">
           <label class="form-label">Estado CTL</label>
-          <select class="form-select" id="add-estado">
-            <option value="pendiente">Pendiente</option>            
-            <option value="descargado">Descargado</option>
-            <option value="enviado">Enviado</option>
-          </select>
+          <input class="form-input" id="add-estado" list="catalogo-estado_ctl" value="pendiente">
         </div>
         <div class="form-group full">
           <label class="form-label">Responsable</label>
           <input class="form-input" id="add-responsable" list="opciones-responsable" placeholder="Seleccione o escriba un nuevo responsable...">
-          <datalist id="opciones-responsable"></datalist>
         </div>
         <div class="form-group full">
           <label class="form-label">Ruta Documento</label>
@@ -680,55 +695,6 @@
   </div>
 </div>
 
-<!-- MODAL: DETALLE PAGO 2026 -->
-<div class="modal-overlay" id="modal-pago2026">
-  <div class="modal" style="max-width:640px">
-    <div class="modal-header">
-      <div>
-        <div class="modal-title" id="pago2026-title">Escritura</div>
-        <div class="modal-sub">Match contra actas registradas</div>
-      </div>
-      <button class="modal-close" onclick="closeModal('modal-pago2026')"><i class="fa fa-close"></i></button>
-    </div>
-    <div class="modal-body">
-      <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">Liquidación</label>
-          <input class="form-input" id="pago2026-liquidacion" type="text" placeholder="Número de liquidación">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Beneficencia (a pagar)</label>
-          <input class="form-input" id="pago2026-vrben" type="number">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Registro (a pagar)</label>
-          <input class="form-input" id="pago2026-vrreg" type="number">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Fecha de pago</label>
-          <input class="form-input" id="pago2026-fecha" type="date">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Observaciones</label>
-          <input class="form-input" id="pago2026-obs">
-        </div>
-      </div>
-      <div id="pago2026-resumen" style="margin:14px 0;padding:12px;border-radius:8px;background:var(--bg-soft,#f5f7fa);font-size:13px"></div>
-      <div class="section-title" style="font-size:13px;margin-top:10px">Actas registradas</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Acta</th><th>Fecha</th><th>Tipo Depósito</th><th>Valor</th><th>Acciones</th></tr></thead>
-          <tbody id="pago2026-actas-body"></tbody>
-        </table>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('modal-pago2026')"><i class="fa fa-times"></i></button>
-      <button class="btn btn-primary" onclick="guardarPago2026()"><i class="fa fa-save"></i></button>
-    </div>
-  </div>
-</div>
-
 <!-- MODAL: LOG PROCESAMIENTO -->
 <div class="modal-overlay" id="modal-proceso">
   <div class="modal" style="max-width:560px">
@@ -750,8 +716,64 @@
   </div>
 </div>
 
+<!-- MODAL: INFORME DE HOJA -->
+<div class="modal-overlay" id="modal-informe">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <div><div class="modal-title">Generar informe</div><div class="modal-sub" id="informe-hoja-label"></div></div>
+      <button class="modal-close" onclick="closeModal('modal-informe')"><i class="fa fa-close"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label" for="informe-responsable">Responsable</label><select class="form-select" id="informe-responsable"><option value="">Todos</option></select></div>
+        <div class="form-group"><label class="form-label" for="informe-gobernacion">Gobernación</label><select class="form-select" id="informe-gobernacion"><option value="">Todas</option></select></div>
+        <div class="form-group"><label class="form-label" for="informe-estado">Estado</label><select class="form-select" id="informe-estado"><option value="">Todos</option></select></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-informe')">Cancelar</button>
+      <button class="btn btn-primary" onclick="generarInformeHoja()"><i class="fa fa-print"></i> Generar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: AGREGAR OPCION DE CATALOGO -->
+<div class="modal-overlay" id="modal-catalogos-registro">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-header">
+      <div><div class="modal-title">Agregar estado u opción</div><div class="modal-sub">La opción quedará disponible para próximos registros.</div></div>
+      <button class="modal-close" onclick="closeModal('modal-catalogos-registro')"><i class="fa fa-close"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label" for="catalogo-registro-tipo">Campo</label>
+        <select class="form-select" id="catalogo-registro-tipo" onchange="renderOpcionesCatalogoRegistro()">
+          <option value="pago">Estado de pago</option>
+          <option value="notificacion">Estado de notificación</option>
+          <option value="estado_ctl">Estado CTL</option>
+          <option value="gobernacion">Gobernación</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label" for="catalogo-registro-valor">Nueva opción</label>
+        <input class="form-input" id="catalogo-registro-valor" placeholder="Ej. procesando">
+      </div>
+      <div id="catalogo-registro-opciones" class="form-hint" style="margin-top:12px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-catalogos-registro')">Cancelar</button>
+      <button class="btn btn-primary" onclick="agregarOpcionCatalogoRegistro()">Guardar opción</button>
+    </div>
+  </div>
+</div>
+
 <!-- Contenedor para mensajes flotantes -->
 <div id="toast-container"></div>
+<datalist id="catalogo-gobernacion"></datalist>
+<datalist id="catalogo-pago"></datalist>
+<datalist id="catalogo-notificacion"></datalist>
+<datalist id="catalogo-estado_ctl"></datalist>
+<datalist id="opciones-responsable"></datalist>
 
 <!-- Modal / Bar de Monitoreo de Jobs en Ejecución -->
 <div id="job-status-modal" class="modal" style="display: none;">
@@ -780,5 +802,4 @@
 <script src="/static/script.js"></script>
 </body>
 </html>
-
 

@@ -153,8 +153,126 @@ let estadoTabla = {
 }
 
 let TABLE_COUNTS = { liq: 0, liq_2025: 0, liq_2026: 0 };
-let TABLE_CACHE = { liq_2025: [], liq_2026: [] };
+let TABLE_CACHE = { ventanilla: [], liq_2025: [], liq_2026: [] };
 let statsLoaded = false;
+let CATALOGOS_REGISTRO = {
+  gobernacion: ['antioquia', 'atlantico', 'bolivar', 'boyaca', 'cundinamarca', 'magdalena', 'meta', 'santander', 'tolima'],
+  pago: ['pendiente', 'ingresado'],
+  notificacion: ['pendiente', 'enviado'],
+  estado_ctl: ['pendiente', 'procesando', 'descargado', 'enviado'],
+};
+let ESCRITURAS_CON_ACTAS_ACTIVAS = new Set();
+
+async function cargarEscriturasConActasActivas() {
+  const response = await fetch('/api/actas/activas/escrituras');
+  if (!response.ok) throw new Error(`No se pudieron consultar actas activas (${response.status})`);
+  const escrituras = await response.json();
+  ESCRITURAS_CON_ACTAS_ACTIVAS = new Set((Array.isArray(escrituras) ? escrituras : []).map(normalizarEscritura));
+}
+
+function filtrarRegistrosConActasActivas(registros) {
+  return registros.filter(registro => ESCRITURAS_CON_ACTAS_ACTIVAS.has(normalizarEscritura(registro.escritura)));
+}
+
+async function cargarCatalogosRegistro() {
+  try {
+    const response = await fetch('/api/catalogos-registro');
+    if (!response.ok) throw new Error(`Error ${response.status}`);
+    const catalogos = await response.json();
+    Object.keys(CATALOGOS_REGISTRO).forEach(tipo => {
+      CATALOGOS_REGISTRO[tipo] = [...new Set([
+        ...CATALOGOS_REGISTRO[tipo],
+        ...(Array.isArray(catalogos[tipo]) ? catalogos[tipo].map(normalizar) : []),
+      ])];
+    });
+    actualizarSugerenciasCatalogos();
+  } catch (error) {
+    console.warn('No se pudieron cargar los catálogos persistentes:', error.message);
+  }
+}
+
+function actualizarSugerenciasCatalogos() {
+  Object.entries(CATALOGOS_REGISTRO).forEach(([tipo, valores]) => {
+    const datalist = document.getElementById(`catalogo-${tipo}`);
+    const campoRegistro = {
+      gobernacion: 'gobernacion',
+      pago: 'pago',
+      notificacion: 'notificacion',
+      estado_ctl: 'estado_ctl',
+    }[tipo];
+    const valoresUsados = REGISTROS.map(registro => normalizar(registro[campoRegistro])).filter(Boolean);
+    if (datalist) datalist.innerHTML = [...new Set([...valores, ...valoresUsados])].sort().map(valor =>
+      `<option value="${escapeHtml(valor)}">`
+    ).join('');
+  });
+}
+
+async function guardarCatalogoRegistro(tipo, valor) {
+  const canonico = normalizar(valor);
+  if (!canonico || !CATALOGOS_REGISTRO[tipo]) return;
+  if (CATALOGOS_REGISTRO[tipo].includes(canonico)) return;
+  const response = await fetch('/api/catalogos-registro', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tipo, valor: canonico }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`No se pudo guardar el nuevo valor de ${tipo}: ${errorText}`);
+  }
+  const result = await response.json();
+  CATALOGOS_REGISTRO[tipo].push(canonico);
+  actualizarSugerenciasCatalogos();
+  if (result.storage === 'local') {
+    showNotif('Opción guardada en este servidor. Para sincronizar entre servidores, aplique el esquema de catálogos de Supabase.', 'info');
+  }
+}
+
+function abrirGestionCatalogos() {
+  renderOpcionesCatalogoRegistro();
+  openModal('modal-catalogos-registro');
+}
+
+function renderOpcionesCatalogoRegistro() {
+  const tipo = document.getElementById('catalogo-registro-tipo')?.value;
+  const container = document.getElementById('catalogo-registro-opciones');
+  if (!container || !tipo) return;
+  const opciones = CATALOGOS_REGISTRO[tipo] || [];
+  container.textContent = opciones.length
+    ? `Disponibles: ${opciones.join(', ')}`
+    : 'Aún no hay opciones guardadas.';
+}
+
+async function agregarOpcionCatalogoRegistro() {
+  const tipo = document.getElementById('catalogo-registro-tipo')?.value;
+  const input = document.getElementById('catalogo-registro-valor');
+  const valor = normalizar(input?.value || '');
+  if (!tipo || !valor) {
+    showNotif('Escriba el valor que desea agregar.', 'error');
+    return;
+  }
+  if (CATALOGOS_REGISTRO[tipo]?.includes(valor)) {
+    showNotif('Esa opción ya está disponible.', 'info');
+    return;
+  }
+  try {
+    await guardarCatalogoRegistro(tipo, valor);
+    if (input) input.value = '';
+    renderOpcionesCatalogoRegistro();
+    showNotif(`Se agregó "${valor}" al catálogo.`, 'success');
+  } catch (error) {
+    showNotif(error.message, 'error');
+  }
+}
+
+async function guardarCatalogosRegistro(registro) {
+  await Promise.all([
+    guardarCatalogoRegistro('gobernacion', registro.gobernacion),
+    guardarCatalogoRegistro('pago', registro.pago),
+    guardarCatalogoRegistro('notificacion', registro.notificacion),
+    guardarCatalogoRegistro('estado_ctl', registro.estado_ctl),
+  ]);
+}
 
 function getPageState(view) {
   return PAGINATION_STATE[view] || PAGINATION_STATE.registros;
@@ -483,9 +601,18 @@ function getFilteredProcesados() {
   const qEl = document.getElementById('search-procesados') || { value: '' };
   const q = String(qEl.value || '').trim().toLowerCase();
   const fE = (document.getElementById('filter-estado-procesados') || {value:''}).value;
-  let rows = REGISTROS.filter(r => {
-    return normalizar(r.pago) === 'ingresado' && normalizar(r.notificacion) === 'enviado' && normalizar(r.estado_ctl) !== 'enviado';
-  }); 
+  const escriturasActivas = new Set(REGISTROS.map(r => normalizarEscritura(r.escritura)));
+  const ventanilla = (TABLE_CACHE.ventanilla || [])
+    .filter(r => {
+      const escritura = normalizarEscritura(r.escritura);
+      return !escriturasActivas.has(escritura) && !ESCRITURAS_CON_ACTAS_ACTIVAS.has(escritura);
+    })
+    .map(r => ({ ...r, tabla_origen: r.tabla_origen || 'liq_2025' }));
+  let rows = [...REGISTROS, ...ventanilla].filter(r =>
+    normalizar(r.pago) === 'ingresado' &&
+    normalizar(r.notificacion) === 'enviado' &&
+    normalizar(r.estado_ctl) === 'pendiente'
+  );
   if (q) {
     const qNorm = q.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     rows = rows.filter(r => {
@@ -915,20 +1042,18 @@ function debePedirTablaDestino() {
 // Informe pagos diarios
 function generarInformePagos() {
     const fechaInput = document.getElementById('fecha-informe-pago').value;
-    
-    if (!fechaInput) {
-        if (!confirm("No has seleccionado una fecha. ¿Deseas generar el informe con TODOS los registros?")) {
-            return;
-        }
-    }
-    // Construir la URL del endpoint
-    let url = `/api/pagos2026/informe`;
-    if (fechaInput) {
-        url += `?fecha_pago=${encodeURIComponent(fechaInput)}`;
-    }
+  const gobernacion = document.getElementById('gobernacion-informe-pago').value;
+  const fechaLabel = fechaInput ? fechaInput.split('-').reverse().join('/') : 'todas las fechas';
+  const gobernacionLabel = gobernacion === 'todas'
+    ? 'todas las gobernaciones, agrupadas por separado'
+    : document.querySelector(`#gobernacion-informe-pago option[value="${gobernacion}"]`).textContent;
 
-    // Abrir el informe en una pestaña nueva listo para imprimir/descargar
-    window.open(url, '_blank');
+  if (!confirm(`¿Generar el informe para ${fechaLabel} y ${gobernacionLabel}?`)) return;
+
+  const parametros = new URLSearchParams();
+  if (fechaInput) parametros.set('fecha_pago', fechaInput);
+  parametros.set('gobernacion', gobernacion);
+  window.open(`/api/pagos2026/informe?${parametros.toString()}`, '_blank');
 }
 
 async function cargarResponsables() {
@@ -1073,7 +1198,7 @@ async function procesarTodos() {
         reg.estado_ctl = 'enviado';
         reg.fecha_proceso = formatDateCO(new Date());
         try { await updateRegistroOnServer(normalizarEscritura(reg.escritura), { estado_ctl: reg.estado_ctl, fecha_proceso: reg.fecha_proceso }); } catch(e){ console.warn('No se pudo actualizar servidor tras envío:', e); }
-        if (pedirTabla && normalizar(reg.pago) === 'ingresado' && normalizar(reg.notificacion).includes('enviado')) {
+        if (pedirTabla && targetTable && normalizar(reg.pago) === 'ingresado' && normalizar(reg.notificacion).includes('enviado')) {
           const targetTable = askTargetLiqTable('liq_2026');
           if (targetTable) {
             await moveRegistroATabla(normalizarEscritura(reg.escritura), targetTable);
@@ -1174,6 +1299,7 @@ async function cargarDashboardStatus() {
 // RENDER UI
 // ================================================================
 function actualizarUI() {
+  actualizarSugerenciasCatalogos();
   const total = REGISTROS.filter(r => {
     const notificacion = normalizar(r.notificacion);
     const pago = normalizar(r.pago);
@@ -1185,12 +1311,7 @@ function actualizarUI() {
     const pago = normalizar(r.pago);
     return pago !== 'ingresado' && notificacion === 'enviado';
   }).length;
-  const procesados = REGISTROS.filter(r => {
-    const pago = normalizar(r.pago);
-    const notificacion = normalizar(r.notificacion);
-    const estado_ctl = normalizar(r.estado_ctl);
-    return pago === 'ingresado' && notificacion === 'enviado' && estado_ctl !== 'enviado' ;
-  }).length;
+  const procesados = getFilteredProcesados().length;
   const docs = Object.values(DOCUMENTOS).flat().length;
   const drafts = Object.keys(BORRADORES).length;
   const pct = total ? Math.round((procesados/total)*1000) : 0;
@@ -1210,7 +1331,10 @@ function actualizarUI() {
   const selEl = document.getElementById('sel-count'); if (selEl) selEl.textContent = `Seleccionados: ${selectedRows.size}`;
 
   // Gobernaciones sidebar
-  const gobs = [...new Set(REGISTROS.map(r=>normalizar(r.gobernacion)).filter(Boolean))];
+  const gobs = [...new Set([
+    ...CATALOGOS_REGISTRO.gobernacion,
+    ...REGISTROS.map(r=>normalizar(r.gobernacion)).filter(Boolean),
+  ])];
   const gobSide = document.getElementById('gob-sidebar');
   if (gobSide) {
     gobSide.innerHTML = gobs.map(g => {
@@ -1259,7 +1383,9 @@ function actualizarUI() {
 function updateLiqStatsUI(stats) {
   const counts = stats && (stats.table_counts || stats);
   TABLE_COUNTS = counts || TABLE_COUNTS;
-  const s25 = TABLE_COUNTS.liq_2025 || TABLE_COUNTS['liq_2025'] || 0;
+  const s25 = Array.isArray(TABLE_CACHE.ventanilla)
+    ? TABLE_CACHE.ventanilla.length
+    : (TABLE_COUNTS.liq_2025 || TABLE_COUNTS['liq_2025'] || 0);
   const s26 = TABLE_COUNTS.liq_2026 || TABLE_COUNTS['liq_2026'] || 0;
   const sliq = TABLE_COUNTS.liq || TABLE_COUNTS['liq'] || 0;
   const consolidated = sliq + s25 + s26;
@@ -1323,7 +1449,7 @@ function renderTable() {
       </div></td>          
       <td class="td-escritura">
         <div class="row-actions"> ${r.escritura}
-        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
       </div></td>  
       <td class="mono">${r.nir||'—'}</td>
       <td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.correo||''}">${r.correo||'—'}</td>
@@ -1412,21 +1538,15 @@ function renderProcesados() {
   if (pageState.page > totalPages) pageState.page = totalPages;
   const pageRows = paginateRows(rows, pageState.page, pageState.pageSize);
   tbody.innerHTML = pageRows.map(r => {
-    const draft = BORRADORES[normalizarEscritura(r.escritura)];
-    const escValue = JSON.stringify(r.escritura);
+    const origen = r.tabla_origen === 'liq_2025' ? 'Ventanilla' : 'Registros';
     return `<tr>
-      <td class="td-escritura"><div class="row-actions">${r.escritura}
-        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
-      </div></td>
+      <td class="td-escritura">${r.escritura}</td>
       <td class="mono">${r.nir||'—'}</td>
       <td style="font-size:11px">${r.correo||'—'}</td>
       <td>${estadoBadge(r.estado_ctl)}</td>
+      <td>${origen}</td>
       <td style="font-size:10px;color:var(--muted)">${r.fecha_proceso||'—'}</td>
-      <td>${draft ? `<button class="btn btn-secondary btn-sm" onclick='verCorreo(${JSON.stringify(r.escritura)})'><i class="fas fa-envelope"></i> Ver borrador</button>` : '<span style="color:var(--muted)">—</span>'}</td>
-      <td><div class="row-actions">
-        
-        <button class="btn btn-primary btn-sm" title="Procesar" onclick='procesarUno(${escValue})'><i class="fas fa-cogs"></i></button>
-      </div></td>
+      <td><span class="badge badge-pendiente">Pendiente de descarga</span></td>
     </tr>`;
   }).join('');
   renderPagination('procesados', rows.length);
@@ -1440,20 +1560,69 @@ function renderLiqTable(tableName) {
   loadLiqTable(tableName);
 }
 
+async function actualizarCampoVentanilla(escritura, campo, valor) {
+  const camposPermitidos = {
+    gobernacion: 'gobernacion',
+    pago: 'pago',
+    notificacion: 'notificacion',
+    estado_ctl: 'estado_ctl',
+  };
+  const tipoCatalogo = camposPermitidos[campo];
+  if (!tipoCatalogo) return;
+  const row = (TABLE_CACHE.ventanilla || []).find(item =>
+    normalizarEscritura(item.escritura) === normalizarEscritura(escritura)
+  );
+  if (!row) return;
+
+  const value = normalizar(valor);
+  try {
+    if (value) await guardarCatalogoRegistro(tipoCatalogo, value);
+    const tabla = row.tabla_origen || 'liq_2025';
+    const response = await fetch(`/api/liq/table/${encodeURIComponent(tabla)}/${encodeURIComponent(escritura)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [campo]: value }),
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(`No se pudo actualizar Ventanilla: ${message}`);
+    }
+    row[campo] = value;
+    actualizarSugerenciasCatalogos();
+    renderProcesados();
+    renderLiqTable('liq_2025');
+    showNotif(`Ventanilla ${escritura} actualizado`, 'success');
+  } catch (error) {
+    showNotif(error.message, 'error');
+    renderLiqTable('liq_2025');
+  }
+}
+
 async function loadLiqTable(tableName) {
   const viewKey = tableName.replace('_', '');
   const tbody = document.getElementById(`${viewKey}-table-body`);
   const pageState = getPageState(viewKey);
   try {
-    let rows = TABLE_CACHE[tableName] || [];
+    let rows = tableName === 'liq_2025' ? (TABLE_CACHE.ventanilla || []) : (TABLE_CACHE[tableName] || []);
     if (!rows.length) {
-      const res = await fetch(`/api/liq/table/${encodeURIComponent(tableName)}?limit=1000&page=1&sort_by=updated_at&desc=true`);
+      const url = tableName === 'liq_2025'
+        ? '/api/ventanilla?limit=10000'
+        : `/api/liq/table/${encodeURIComponent(tableName)}?limit=1000&page=1&sort_by=updated_at&desc=true`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       rows = await res.json();
       if (!Array.isArray(rows)) rows = [];
-      TABLE_CACHE[tableName] = rows;
+      TABLE_CACHE[tableName === 'liq_2025' ? 'ventanilla' : tableName] = rows;
     }
-    rows = getFilteredLiqTable(tableName);
+    if (tableName === 'liq_2025') {
+      const searchTerm = normalizar(document.getElementById('search-liq2025')?.value || '');
+      if (searchTerm) rows = rows.filter(row => ['escritura', 'nir', 'correo', 'gobernacion', 'responsable'].some(field => normalizar(row[field]).includes(searchTerm)));
+    } else {
+      rows = getFilteredLiqTable(tableName);
+    }
+    if (tableName === 'liq_2025') {
+      rows = rows.filter(row => !ESCRITURAS_CON_ACTAS_ACTIVAS.has(normalizarEscritura(row.escritura)));
+    }
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted)">No hay registros en esta tabla</td></tr>';
       const pageBar = document.getElementById(`pagination-${viewKey}`);
@@ -1463,23 +1632,26 @@ async function loadLiqTable(tableName) {
     const totalPages = Math.max(1, Math.ceil(rows.length / pageState.pageSize));
     if (pageState.page > totalPages) pageState.page = totalPages;
     const pageRows = paginateRows(rows, pageState.page, pageState.pageSize);
+    const esVentanilla = tableName === 'liq_2025';
+    const campoEditable = (row, field, catalogType) => {
+      const value = escapeHtml(normalizar(row[field] || ''));
+      return `<input class="form-input" style="min-width:110px;padding:4px 6px" list="catalogo-${catalogType}" value="${value}" data-escritura="${escapeHtml(row.escritura)}" data-campo="${field}" onchange="actualizarCampoVentanilla(this.dataset.escritura,this.dataset.campo,this.value)" aria-label="${field} de escritura ${escapeHtml(row.escritura)}">`;
+    };
     tbody.innerHTML = pageRows.map(r => {
       const esc = r.escritura || '';
       const escValue = JSON.stringify(esc);
       return `<tr>
         <td class="td-escritura"><div class="row-actions">${r.escritura || '—'}
-          <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>
+          ${esVentanilla ? '' : `<button class="btn btn-ghost btn-sm" title="Ver detalle" onclick='verDetalle(${escValue})'><i class="fas fa-eye"></i></button>`}
         </div></td>
         <td class="mono">${r.nir || '—'}</td>
         <td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.correo || ''}">${r.correo || '—'}</td>        
-        <td>${estadoBadge(r.notificacion)}</td>
-        <td>${pagoBadge(r.pago)}</td>
-        <td>${estadoBadge(r.estado_ctl)}</td>
-        <td>${gobBadge(r.gobernacion)}</td>
+        <td>${esVentanilla ? campoEditable(r, 'notificacion', 'notificacion') : estadoBadge(r.notificacion)}</td>
+        <td>${esVentanilla ? campoEditable(r, 'pago', 'pago') : pagoBadge(r.pago)}</td>
+        <td>${esVentanilla ? campoEditable(r, 'estado_ctl', 'estado_ctl') : estadoBadge(r.estado_ctl)}</td>
+        <td>${esVentanilla ? campoEditable(r, 'gobernacion', 'gobernacion') : gobBadge(r.gobernacion)}</td>
         <td style="font-size:10px;color:var(--muted)">${r.fecha_proceso || r.updated_at || '—'}</td>
-        <td><div class="row-actions">
-          <button class="btn btn-primary btn-sm" title="Procesar" onclick='procesarUno(${escValue})'><i class="fas fa-cogs"></i></button>
-        </div></td>
+        <td>${esVentanilla ? '<span class="badge">Ventanilla</span>' : `<div class="row-actions"><button class="btn btn-primary btn-sm" title="Procesar" onclick='procesarUno(${escValue})'><i class="fas fa-cogs"></i></button></div>`}</td>
       </tr>`;
     }).join('');
     renderPagination(viewKey, rows.length);
@@ -1501,18 +1673,15 @@ function renderConsolidado() {
   const body = document.getElementById('consolidado-body');
   if (!body) return;
   const liq = TABLE_COUNTS.liq || 0;
-  const liq2025 = TABLE_COUNTS.liq_2025 || 0;
+  const liq2025 = Array.isArray(TABLE_CACHE.ventanilla)
+    ? TABLE_CACHE.ventanilla.length
+    : (TABLE_COUNTS.liq_2025 || 0);
   const liq2026 = TABLE_COUNTS.liq_2026 || 0;
   const total = liq2025 + liq2026;
-  const procesados = REGISTROS.filter(r => {
-    const pago = normalizar(r.pago);
-    const notificacion = normalizar(r.notificacion);
-    const estado_ctl = normalizar(r.estado_ctl);
-    return notificacion === 'enviado' && pago === 'ingresado' && estado_ctl !== 'procesando';
-  }).length;
+  const procesados = getFilteredProcesados().length;
   body.innerHTML = `
     <tr><td>liq</td><td>${liq}</td><td><button class="btn btn-ghost btn-sm" onclick="setView('registros', this)">Ver</button></td></tr>
-    <tr><td>liq_2025</td><td>${liq2025}</td><td><button class="btn btn-ghost btn-sm" onclick="setView('liq2025', this)">Ver</button></td></tr>
+    <tr><td>Ventanilla</td><td>${liq2025}</td><td><button class="btn btn-ghost btn-sm" onclick="setView('liq2025', this)">Ver</button></td></tr>
     <tr><td>liq_2026</td><td>${liq2026}</td><td><button class="btn btn-ghost btn-sm" onclick="setView('liq2026', this)">Ver</button></td></tr>
     <tr><td colspan="3" style="font-weight:600;color:var(--accent)">Procesados según regla: ${procesados}</td></tr>
   `;
@@ -1565,15 +1734,16 @@ async function descargarBackupExcel() {
 }
 
 function askTargetLiqTable(defaultValue = 'liq_2026') {
-  const target = window.prompt('Destino de tabla para registros completos (liq_2025 o liq_2026):', defaultValue);
+  const target = window.prompt('Destino para registros completos (Ventanilla o liq_2026):', defaultValue);
   if (!target) return null;
   const clean = target.trim().replace(/\s+/g, '').toLowerCase();
+  if (clean === 'ventanilla') return 'liq_2025';
   if (clean === 'liq_2025' || clean === 'liq_2026') return clean;
   if (clean === 'liq2025') return 'liq_2025';
   if (clean === 'liq2026') return 'liq_2026';
   if (clean === '2025') return 'liq_2025';
   if (clean === '2026') return 'liq_2026';
-  showNotif('Destino inválido. Use liq_2025 o liq_2026.', 'error');
+  showNotif('Destino inválido. Use Ventanilla o liq_2026.', 'error');
   return null;
 }
 
@@ -1776,7 +1946,7 @@ async function procesarUno(esc) {
   const escNorm = normalizarEscritura(esc);
   const reg = REGISTROS.find(r => normalizarEscritura(r.escritura) === escNorm);
   if (!reg) {
-    showNotif(`No se encontrÃ³ la escritura ${escNorm}`, 'error');
+    showNotif(`No se encontró la escritura ${escNorm}`, 'error');
     return;
   }
 
@@ -1883,7 +2053,7 @@ function renderizarTabla(filas) {
 function verDetalle(esc) {
   const reg = REGISTROS.find(r => normalizarEscritura(r.escritura) === normalizarEscritura(esc));
   if (!reg) return;
-  currentDetailId = esc;
+  currentDetailId = reg.escritura;
   document.getElementById('modal-escritura-title').textContent = `Escritura ${reg.escritura}`;
   document.getElementById('modal-escritura-sub').textContent = `NIR: ${reg.nir||''} - ${reg.correo||''}`;
 
@@ -1902,20 +2072,28 @@ function verDetalle(esc) {
       <div class="detail-val"><input class="form-input" id="detail-correo" type="email" value="${reg.correo||''}"></div>
     </div>
     <div class="detail-item">
+      <div class="detail-key">Responsable</div>
+      <div class="detail-val"><input class="form-input" id="detail-responsable" list="opciones-responsable" value="${reg.responsable||''}"></div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-key">Observaciones</div>
+      <div class="detail-val"><input class="form-input" id="detail-observaciones" value="${reg.observaciones||''}"></div>
+    </div>
+    <div class="detail-item">
       <div class="detail-key">Pago</div>
-      <div class="detail-val"><select class="form-select" id="detail-pago"><option value="pendiente" ${normalizar(reg.pago||'pendiente')==='pendiente'?'selected':''}>Pendiente</option><option value="ingresado" ${normalizar(reg.pago||'pendiente')==='ingresado'?'selected':''}>Ingresado</option></select></div>
+      <div class="detail-val"><input class="form-input" id="detail-pago" list="catalogo-pago" value="${normalizar(reg.pago||'pendiente')}"></div>
     </div>
     <div class="detail-item">
       <div class="detail-key">Estado CTL</div>
-      <div class="detail-val"><select class="form-select" id="detail-estado_ctl"><option value="pendiente" ${normalizar(reg.estado_ctl||'pendiente')==='pendiente'?'selected':''}>Pendiente</option><option value="enviado" ${normalizar(reg.estado_ctl||'pendiente')==='enviado'?'selected':''}>Enviado</option></select></div>
+      <div class="detail-val"><input class="form-input" id="detail-estado_ctl" list="catalogo-estado_ctl" value="${normalizar(reg.estado_ctl||'pendiente')}"></div>
     </div>
     <div class="detail-item">
       <div class="detail-key">Notificación</div>
-      <div class="detail-val"><select class="form-select" id="detail-notificacion"><option value="pendiente" ${normalizar(reg.notificacion||'pendiente')==='pendiente'?'selected':''}>Pendiente</option><option value="enviado" ${normalizar(reg.notificacion||'pendiente')==='enviado'?'selected':''}>Enviado</option></select></div>
+      <div class="detail-val"><input class="form-input" id="detail-notificacion" list="catalogo-notificacion" value="${normalizar(reg.notificacion||'pendiente')}"></div>
     </div>
     <div class="detail-item">
       <div class="detail-key">Gobernación</div>
-      <div class="detail-val"><select class="form-select" id="detail-gobernacion"><option value="">— sin gobernación —</option><option value="cundinamarca" ${normalizar(reg.gobernacion||'')==='cundinamarca'?'selected':''}>Cundinamarca</option><option value="bolivar" ${normalizar(reg.gobernacion||'')==='bolivar'?'selected':''}>Bolívar</option><option value="tolima" ${normalizar(reg.gobernacion||'')==='tolima'?'selected':''}>Tolima</option><option value="boyaca" ${normalizar(reg.gobernacion||'')==='boyaca'?'selected':''}>Boyacá</option><option value="santander" ${normalizar(reg.gobernacion||'')==='santander'?'selected':''}>Santander</option><option value="atlantico" ${normalizar(reg.gobernacion||'')==='atlantico'?'selected':''}>Atlántico</option><option value="antioquia" ${normalizar(reg.gobernacion||'')==='antioquia'?'selected':''}>Antioquia</option><option value="magdalena" ${normalizar(reg.gobernacion||'')==='magdalena'?'selected':''}>Magdalena</option></select></div>
+      <div class="detail-val"><input class="form-input" id="detail-gobernacion" list="catalogo-gobernacion" value="${normalizar(reg.gobernacion||'')}"></div>
     </div>        
     <div class="detail-item">
       <div class="detail-key">Fecha Proceso</div>
@@ -1953,7 +2131,7 @@ function verDetalle(esc) {
   }
 
   document.getElementById('btn-reprocesar').onclick = async () => {
-    const r = REGISTROS.find(r => r.escritura === esc);
+    const r = REGISTROS.find(r => normalizarEscritura(r.escritura) === normalizarEscritura(esc));
     if (!r) return;
     await procesarRegistro(r);
     try {
@@ -1969,7 +2147,7 @@ function verDetalle(esc) {
   };
 
   document.getElementById('btn-marcar-enviado').onclick = async () => {
-    const r = REGISTROS.find(r => r.escritura === esc);
+    const r = REGISTROS.find(r => normalizarEscritura(r.escritura) === normalizarEscritura(esc));
     if (!r) return;
     r.estado_ctl = 'enviado';
     r.fecha_proceso = formatDateCO(new Date());
@@ -1983,6 +2161,7 @@ function verDetalle(esc) {
 
   setModalTab('info', null);
   openModal('modal-detalle');
+  cargarDetallePagoEnRegistro(reg.escritura);
 }
 
 function verCorreo(esc) {
@@ -2023,7 +2202,7 @@ function openAddModal() {
 }
 
 async function saveRegistroToServer(reg) {
-  const allowed = ['escritura','nir','correo','notificacion','pago','estado_ctl','gobernacion','devolucion','escritura_str','fecha_proceso'];
+  const allowed = ['escritura','nir','correo','responsable','observaciones','notificacion','pago','estado_ctl','gobernacion','devolucion','escritura_str','fecha_proceso'];
   const payload = Object.fromEntries(Object.entries(reg).filter(([k]) => allowed.includes(k)));
   if (payload.responsable) {
     try {
@@ -2053,8 +2232,20 @@ async function updateRegistroOnServer(esc, payload) {
   const reg = REGISTROS.find(r => String(r.escritura) === String(esc));
   if (!reg) throw new Error(`No se encontro registro ${esc}`);
 
-  const allowed = ['escritura','nir','correo','notificacion','pago','estado_ctl','gobernacion','devolucion','escritura_str','fecha_proceso'];
+  const allowed = ['escritura','nir','correo','responsable','observaciones','notificacion','pago','estado_ctl','gobernacion','devolucion','escritura_str','fecha_proceso'];
   const body = Object.fromEntries(Object.entries(payload).filter(([k]) => allowed.includes(k)));
+
+  if (body.responsable) {
+    try {
+      await fetch('/api/responsables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre: body.responsable }),
+      });
+    } catch (error) {
+      console.warn('No se pudo guardar responsable del registro:', error);
+    }
+  }
 
   const response = await fetch(`/api/liq/${encodeURIComponent(esc)}`, {
     method: 'PATCH',
@@ -2077,7 +2268,7 @@ async function updateRegistroOnServer(esc, payload) {
 }
 
 async function guardarDetalleActual(esc, extra = {}) {
-  const reg = REGISTROS.find(r => r.escritura === esc);
+  const reg = REGISTROS.find(r => normalizarEscritura(r.escritura) === normalizarEscritura(esc));
   if (!reg) return;
 
   const nuevaEscritura = document.getElementById('detail-escritura').value.trim();
@@ -2091,6 +2282,8 @@ async function guardarDetalleActual(esc, extra = {}) {
     escritura: escrituraFinal,
     nir: document.getElementById('detail-nir').value.trim(),
     correo: document.getElementById('detail-correo').value.trim(),
+    responsable: document.getElementById('detail-responsable').value.trim(),
+    observaciones: document.getElementById('detail-observaciones').value.trim(),
     notificacion: normalizar(document.getElementById('detail-notificacion').value || reg.notificacion),
     pago: normalizar(document.getElementById('detail-pago').value || reg.pago),
     estado_ctl: normalizar(document.getElementById('detail-estado_ctl').value || reg.estado_ctl),
@@ -2099,8 +2292,25 @@ async function guardarDetalleActual(esc, extra = {}) {
   };
 
   try {
+    await guardarCatalogosRegistro(payload);
     const oldEscritura = reg.escritura;
     const updated = await updateRegistroOnServer(oldEscritura, payload);
+    currentDetailId = escrituraFinal;
+    const pagoResponse = await fetch(`/api/pagos2026/${encodeURIComponent(escrituraFinal)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        liquidacion: document.getElementById('detail-pago-liquidacion').value.trim(),
+        vr_ben: Number(document.getElementById('detail-pago-vrben').value) || 0,
+        vr_reg: Number(document.getElementById('detail-pago-vrreg').value) || 0,
+        fecha_pago: document.getElementById('detail-pago-fecha').value || null,
+        observaciones: document.getElementById('detail-pago-obs').value.trim(),
+      }),
+    });
+    if (!pagoResponse.ok) {
+      const errorText = await pagoResponse.text();
+      throw new Error(`La ficha se guardó, pero falló el pago: ${errorText}`);
+    }
     const override = document.getElementById('detail-mail-type')?.value || '';
     const newKey = normalizarEscritura(escrituraFinal);
     const oldKey = normalizarEscritura(oldEscritura);
@@ -2118,6 +2328,10 @@ async function guardarDetalleActual(esc, extra = {}) {
       }
     }
     showNotif(`Registro ${escrituraFinal} actualizado`, 'success');
+    await fetchPagos2026();
+    renderPagos2026();
+    if (normalizar(payload.pago) === 'ingresado') await cargarRegistrosDelServidor();
+    await cargarDetallePagoEnRegistro(escrituraFinal);
     return updated;
   } catch (e) {
     showNotif(e.message, 'error');
@@ -2155,6 +2369,7 @@ async function guardarNuevoRegistro(procesar = false) {
 
   let inserted;
   try {
+    await guardarCatalogosRegistro(nuevo);
     inserted = await saveRegistroToServer(nuevo);
     if (!inserted) throw new Error('No se recibiÃ³ confirmaciÃ³n de inserciÃ³n.');
   } catch (e) {
@@ -2397,7 +2612,8 @@ async function handleExcelFile(file) {
     }
     
     const result = data.import_result;
-    const mensaje = `Importación completada: ${result.nuevos} nuevos, ${result.actualizados} actualizados`;
+    const pagosImportados = Number(result.pagos_actualizados) || 0;
+    const mensaje = `Importación completada: ${result.nuevos} nuevos, ${result.actualizados} actualizados; ${pagosImportados} pagos asociados`;
     showNotif(mensaje, 'success');
     
     // Recargar registros desde servidor
@@ -2412,6 +2628,17 @@ async function handleExcelFile(file) {
 
 async function cargarRegistrosDelServidor() {
   try {
+    await cargarEscriturasConActasActivas();
+    try {
+      const ventanillaResponse = await fetch('/api/ventanilla?limit=10000');
+      if (ventanillaResponse.ok) {
+        const ventanillaRows = await ventanillaResponse.json();
+        TABLE_CACHE.ventanilla = Array.isArray(ventanillaRows) ? ventanillaRows : [];
+        updateLiqStatsUI(TABLE_COUNTS);
+      }
+    } catch (error) {
+      console.warn('No se pudo actualizar la caché de Ventanilla:', error.message);
+    }
     const response = await fetch('/api/liq/all?limit=1000');
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2420,8 +2647,9 @@ async function cargarRegistrosDelServidor() {
     const rows = Array.isArray(data) ? data : [];
     rows.forEach(r => {
       r.escritura = normalizarEscritura(r.escritura);
+      r.tabla_origen = 'liq';
     });
-    REGISTROS = rows;
+    REGISTROS = filtrarRegistrosConActasActivas(rows);
     await fetchLiqStats();
     actualizarUI();
     renderCurrentView();
@@ -2613,13 +2841,22 @@ async function importarActasFile(input) {
   }
 }
 
-function abrirModalActa() {
+function abrirModalActa(desdeDetalle = false) {
   PAGOS2026_EDITING_ACTA_ID = null;
   ['acta-escritura','acta-numero','acta-valor','acta-fecha','acta-radicado','acta-cliente','acta-documento'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
+  document.getElementById('acta-escritura').readOnly = false;
   document.getElementById('acta-tipo').value = 'Beneficencia';
   openModal('modal-acta');
+  if (desdeDetalle && currentDetailId) document.getElementById('modal-detalle').classList.add('open');
+}
+
+function abrirActaDesdeDetalle() {
+  abrirModalActa(true);
+  const escritura = document.getElementById('acta-escritura');
+  escritura.value = currentDetailId || '';
+  escritura.readOnly = true;
 }
 
 function abrirEditarActa(actaId) {
@@ -2631,13 +2868,16 @@ function abrirEditarActa(actaId) {
     })
     .then(acta => {
       document.getElementById('acta-escritura').value = acta.escritura || '';
+      document.getElementById('acta-escritura').readOnly = true;
       document.getElementById('acta-numero').value = acta.acta || '';
       document.getElementById('acta-tipo').value = acta.tipo_deposito || 'Beneficencia';
       document.getElementById('acta-valor').value = acta.valor_acta || 0;
       document.getElementById('acta-fecha').value = acta.fecha_acta || '';
       document.getElementById('acta-radicado').value = acta.radicado || '';
       document.getElementById('acta-cliente').value = acta.cliente || '';
+      document.getElementById('acta-documento').value = acta.documento || '';
       openModal('modal-acta');
+      if (currentDetailId) document.getElementById('modal-detalle').classList.add('open');
     })
     .catch(error => showNotif(error.message, 'error'));
 }
@@ -2653,8 +2893,7 @@ function eliminarActa(actaId) {
       showNotif('Acta eliminada correctamente', 'success');
       await fetchPagos2026();
       renderPagos2026();
-      const currentEscritura = Number(document.getElementById('pago2026-resumen').dataset.escritura);
-      if (currentEscritura) abrirDetallePago2026(currentEscritura);
+      if (currentDetailId) await cargarDetallePagoEnRegistro(currentDetailId);
     })
     .catch(error => showNotif(error.message, 'error'));
 }
@@ -2700,83 +2939,55 @@ async function guardarActa() {
     PAGOS2026_EDITING_ACTA_ID = null;
     await fetchPagos2026();
     renderPagos2026();
-  } catch (e) {
-    showNotif(e.message, 'error');
-  }
-}
-//================================================================
-// VISTA DETALLE DE PAGOS 2026
-async function abrirDetallePago2026(escritura) {
-  const fila = PAGOS2026.find(r => r.escritura === escritura);
-  if (!fila) return;
-
-  document.getElementById('pago2026-title').textContent = `Escritura ${escritura}`;
-  document.getElementById('pago2026-liquidacion').value = fila.liquidacion || '';
-  document.getElementById('pago2026-vrben').value = fila.vr_ben || 0;
-  document.getElementById('pago2026-vrreg').value = fila.vr_reg || 0;
-  document.getElementById('pago2026-fecha').value = fila.fecha_pago || '';
-  document.getElementById('pago2026-obs').value = fila.observaciones || '';
-  document.getElementById('pago2026-resumen').dataset.escritura = escritura;
-
-  const resumenEl = document.getElementById('pago2026-resumen');
-  const estado = fila.faltante > 0
-    ? `<b style="color:var(--danger,#dc2626)">Falta cobrar ${formatCOP(fila.faltante)}</b>`
-    : (fila.sobrante > 0 ? `<b style="color:var(--success,#16a34a)">Hay un sobrante de ${formatCOP(fila.sobrante)}</b>` : `<b>Pago completo, sin diferencias</b>`);
-  resumenEl.innerHTML = `
-    Total a cobrar: <b>${formatCOP(fila.total)}</b> &nbsp;|&nbsp; Pagado en actas: <b>${formatCOP(fila.pago_cli)}</b><br>
-    ${estado}<br>
-    Diferencia Beneficencia: <b>${formatCOP(fila.dif_ben)}</b> &nbsp;|&nbsp; Diferencia Registro: <b>${formatCOP(fila.dif_reg)}</b>`;
-
-  const tbody = document.getElementById('pago2026-actas-body');
-  tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted)">Cargando...</td></tr>`;
-  openModal('modal-pago2026');
-
-  try {
-    const response = await fetch(`/api/pagos2026/${escritura}/actas`);
-    const actas = response.ok ? await response.json() : [];
-    tbody.innerHTML = actas.length ? actas.map(a => `
-      <tr>
-        <td>${a.acta||'-'}</td>
-        <td>${a.fecha_acta||'-'}</td>
-        <td>${a.tipo_deposito}</td>
-        <td>${formatCOP(a.valor_acta)}</td>
-        <td>
-          <button class="btn btn-secondary btn-sm" onclick="abrirEditarActa(${a.id})">Editar</button>
-          <button class="btn btn-danger btn-sm" onclick="eliminarActa(${a.id})">Borrar</button>
-        </td>
-      </tr>
-    `).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--muted)">Sin actas individuales</td></tr>`;
-  } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Error al cargar actas</td></tr>`;
-  }
-}
-
-async function guardarPago2026() {
-  const escritura = Number(document.getElementById('pago2026-resumen').dataset.escritura);
-  const payload = {
-    liquidacion: document.getElementById('pago2026-liquidacion').value.trim() || null,
-    vr_ben: Number(document.getElementById('pago2026-vrben').value) || 0,
-    vr_reg: Number(document.getElementById('pago2026-vrreg').value) || 0,
-    fecha_pago: document.getElementById('pago2026-fecha').value || null,
-    observaciones: document.getElementById('pago2026-obs').value.trim(),
-  };
-
-  try {
-    const response = await fetch(`/api/pagos2026/${escritura}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Error al guardar: ${response.status} ${errorText}`);
+    await cargarRegistrosDelServidor();
+    if (currentDetailId && normalizarEscritura(currentDetailId) === normalizarEscritura(escritura)) {
+      await cargarDetallePagoEnRegistro(currentDetailId);
     }
-    closeModal('modal-pago2026');
-    showNotif(`Valores actualizados para escritura ${escritura}`, 'success');
-    await fetchPagos2026();
-    renderPagos2026();
   } catch (e) {
     showNotif(e.message, 'error');
+  }
+}
+//===============================================================
+// DETALLE UNIFICADO DE ESCRITURA Y PAGOS
+async function abrirDetallePago2026(escritura) {
+  verDetalle(escritura);
+}
+
+async function cargarDetallePagoEnRegistro(escritura) {
+  const tbody = document.getElementById('detail-actas-body');
+  const resumen = document.getElementById('detail-pago-resumen');
+  if (!tbody || !resumen) return;
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted)">Cargando actas...</td></tr>';
+
+  try {
+    const response = await fetch(`/api/pagos2026/${encodeURIComponent(escritura)}/detalle`);
+    if (!response.ok) throw new Error(`Error ${response.status}`);
+    const data = await response.json();
+    const pago = data.pago || {};
+    const actas = Array.isArray(data.actas) ? data.actas : [];
+    document.getElementById('detail-pago-liquidacion').value = pago.liquidacion || '';
+    document.getElementById('detail-pago-vrben').value = pago.vr_ben ?? 0;
+    document.getElementById('detail-pago-vrreg').value = pago.vr_reg ?? 0;
+    document.getElementById('detail-pago-fecha').value = pago.fecha_pago || '';
+    document.getElementById('detail-pago-obs').value = pago.observaciones || '';
+
+    const pagado = actas.reduce((sum, acta) => sum + (Number(acta.valor_acta) || 0), 0);
+    const aCobrar = (Number(pago.vr_ben) || 0) + (Number(pago.vr_reg) || 0);
+    const faltante = Math.max(aCobrar - pagado, 0);
+    const sobrante = Math.max(pagado - aCobrar, 0);
+    resumen.innerHTML = `A cobrar: <b>${formatCOP(aCobrar)}</b> &nbsp;|&nbsp; Pagado en actas: <b>${formatCOP(pagado)}</b> &nbsp;|&nbsp; ${faltante ? `Faltante: <b>${formatCOP(faltante)}</b>` : `Sobrante: <b>${formatCOP(sobrante)}</b>`}`;
+    tbody.innerHTML = actas.length ? actas.map(acta => `
+      <tr>
+        <td>${escapeHtml(acta.acta || '-')}</td>
+        <td>${escapeHtml(acta.fecha_acta || '-')}</td>
+        <td>${escapeHtml(acta.tipo_deposito || '-')}</td>
+        <td>${formatCOP(acta.valor_acta)}</td>
+        <td>${escapeHtml(acta.estado || 'activa')}</td>
+        <td><button class="btn btn-secondary btn-sm" onclick="abrirEditarActa(${Number(acta.id)})">Editar</button>
+          <button class="btn btn-danger btn-sm" onclick="eliminarActa(${Number(acta.id)})">Borrar</button></td>
+      </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--muted)">Sin actas individuales</td></tr>';
+  } catch (error) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger,#dc2626)">No se pudieron cargar pagos y actas: ${escapeHtml(error.message)}</td></tr>`;
   }
 }
 
@@ -2805,6 +3016,50 @@ function previsualizarBorrador(esc, tipo) {
 // ================================================================
 // NAVIGATION
 // ================================================================
+let HOJA_INFORME_ACTUAL = '';
+
+async function abrirInforme(hoja) {
+  HOJA_INFORME_ACTUAL = hoja;
+  const selects = [
+    ['responsables', document.getElementById('informe-responsable'), 'Todos'],
+    ['gobernaciones', document.getElementById('informe-gobernacion'), 'Todas'],
+    ['estados', document.getElementById('informe-estado'), 'Todos'],
+  ];
+  document.getElementById('informe-hoja-label').textContent = `Hoja: ${hoja === 'ventanilla' ? 'Ventanilla' : hoja === 'procesar' ? 'Procesar' : capFirst(hoja)}`;
+  selects.forEach(([, select, placeholder]) => { select.innerHTML = `<option value="">${placeholder}</option>`; });
+
+  try {
+    const response = await fetch(`/api/informes/opciones?hoja=${encodeURIComponent(hoja)}`);
+    if (!response.ok) throw new Error(`Error ${response.status}`);
+    const options = await response.json();
+    selects.forEach(([key, select, placeholder]) => {
+      select.innerHTML = `<option value="">${placeholder}</option>` + (options[key] || []).map(value =>
+        `<option value="${escapeHtml(value)}">${escapeHtml(capFirst(value))}</option>`
+      ).join('');
+    });
+    openModal('modal-informe');
+  } catch (error) {
+    showNotif(`No se pudieron cargar las opciones del informe: ${error.message}`, 'error');
+  }
+}
+
+function generarInformeHoja() {
+  const popup = window.open('', '_blank');
+  if (!popup) {
+    showNotif('Permita las ventanas emergentes para abrir el informe.', 'error');
+    return;
+  }
+  const params = new URLSearchParams({ hoja: HOJA_INFORME_ACTUAL });
+  const filters = {
+    responsable: document.getElementById('informe-responsable').value,
+    gobernacion: document.getElementById('informe-gobernacion').value,
+    estado: document.getElementById('informe-estado').value,
+  };
+  Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+  popup.location.href = `/api/informes/tabla?${params.toString()}`;
+  closeModal('modal-informe');
+}
+
 function setView(name, el) {
   currentView = name;
   resetPagination(name);
@@ -2988,67 +3243,39 @@ async function enviarRecibos() {
   sub.textContent = 'Iniciando envío de recibos (borradores en Gmail)...';
   btnOk.style.display = 'none';
 
-  let startRes, startOut;
+  let startRes;
   try {
     startRes = await fetch('/api/envios/recibos/start', { method: 'POST' });
     if (!startRes.ok) throw new Error("HTTP " + startRes.status);
-    startOut = await startRes.json();
-  } catch (e) {
-    log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-err">[ERROR] No se pudo iniciar el proceso: ${escapeHtml(e.message)}</span></div>`;
-    btnOk.style.display = '';
-    return;
-  }
+    const startOut = await startRes.json();
+    const jobId = startOut.job_id;
+    log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-info">[INFO] Job iniciado: ${escapeHtml(jobId)}</span></div>`;
 
-  const jobId = startOut.job_id;
-  log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-info">[INFO] Job iniciado: ${escapeHtml(jobId)}</span></div>`;
-
-  let lastLen = 0;
-
-  const poll = async () => {
-    try {
+    let lastLen = 0;
+    const poll = async () => {
       const res = await fetch(`/api/jobs/${jobId}`);
-      if (!res.ok) {
-        log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-err">[ERROR] HTTP ${res.status} al obtener estado del job</span></div>`;
-        btnOk.style.display = '';
-        return;
-      }
+      if (!res.ok) { log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-err">[ERROR] HTTP ${res.status}</span></div>`; btnOk.style.display=''; return; }
       const job = await res.json();
 
       // progreso simple mientras corre
       if (job.status === 'running') {
-        const current = parseInt((prog.style.width || '5').replace('%',''), 10);
-        prog.style.width = Math.min(current + 3, 90) + '%';
-        sub.textContent = 'Generando borradores de recibos...';
+        const current = parseInt((prog.style.width||'5').replace('%',''),10);
+        prog.style.width = Math.min(current+4,90)+'%';
+        sub.textContent='Generando borradores de recibos...';
       }
 
       // logs nuevos
-      const logs = job.logs || [];
-      if (logs.length > lastLen) {
-        for (let i = lastLen; i < logs.length; i++) {
-          const line = logs[i];
-          log.innerHTML += `<div class="log-line">
-            <span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span>
-            <span class="log-info">${escapeHtml(line)}</span>
-          </div>`;
-        }
-        lastLen = logs.length;
-        log.scrollTop = log.scrollHeight;
-      }
-
-      if (job.status === 'done' || job.status === 'completed') {
-        prog.style.width = '100%';
-        prog.classList.add('green');
-        sub.textContent = 'Envío de recibos finalizado (borradores listos para revisión).';
-        btnOk.style.display = '';
+      const logs = job.logs||[];
+      if (logs.length > lastLen) { for (let i=lastLen;i<logs.length;i++) { log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-info">${escapeHtml(logs[i])}</span></div>`; } lastLen = logs.length; log.scrollTop = log.scrollHeight; }
+      if (job.status === 'done' || job.status === 'completed') { prog.style.width='100%'; prog.classList.add('green'); sub.textContent='Envío de recibos finalizado (borradores listos para revisión).';
+        btnOk.style.display='';
         showNotif('Borradores de recibos generados', 'success');
         try { await cargarRegistrosDelServidor(); } catch (e) { console.warn('No se pudo recargar registros tras envíos:', e); }
         return;
       }
 
-      if (job.status === 'error') {
-        prog.style.width = '100%';
-        sub.textContent = 'Proceso finalizó con error (ver log).';
-        btnOk.style.display = '';
+      if (job.status === 'error') { prog.style.width='100%'; sub.textContent='Proceso finalizó con error (ver log).';
+        btnOk.style.display='';
         showNotif('Error generando borradores de recibos', 'error');
         return;
       }
@@ -3063,13 +3290,12 @@ async function enviarRecibos() {
       sub.textContent = 'Estado desconocido del proceso';
       btnOk.style.display = '';
       setTimeout(poll, 900);
-    } catch(e) {
-      log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-err">[ERROR] Error al consultar estado: ${escapeHtml(e.message)}</span></div>`;
-      btnOk.style.display = '';
-    }
-  };
-
-  poll();
+    };
+    poll();
+  } catch (e) {
+    log.innerHTML += `<div class="log-line"><span class="log-time">${new Date().toLocaleTimeString('es-CO')}</span><span class="log-err">[ERROR] ${escapeHtml(e.message)}</span></div>`;
+    btnOk.style.display = '';
+  }
 }
 
 async function procesarReciboBackendUnico(reg) {
@@ -3228,7 +3454,15 @@ async function enviarCertificadoBackendUnico(reg) {
 // Primero intentamos cargar datos desde el backend (si existe)
 async function fetchServerData() {
   try {
+    await cargarCatalogosRegistro();
     await fetchLiqStats();
+    await cargarEscriturasConActasActivas();
+    const ventanillaResponse = await fetch('/api/ventanilla?limit=10000');
+    if (ventanillaResponse.ok) {
+      const ventanillaRows = await ventanillaResponse.json();
+      TABLE_CACHE.ventanilla = Array.isArray(ventanillaRows) ? ventanillaRows : [];
+      updateLiqStatsUI(TABLE_COUNTS);
+    }
 
     const tables = ['liq', 'liq_2025', 'liq_2026'];
     const collected = [];
@@ -3239,8 +3473,11 @@ async function fetchServerData() {
         if (!res.ok) continue;
         const rows = await res.json();
         if (Array.isArray(rows)) {
+          if (tableName === 'liq_2025') TABLE_CACHE.liq_2025 = rows;
+          if (tableName === 'liq_2026') TABLE_CACHE.liq_2026 = rows;
           rows.forEach(r => {
             const normalized = {
+              ...r,
               escritura: r.escritura || r.escritura_str || '',
               nir: r.nir || '',
               correo: r.correo || r.email || '',
@@ -3257,7 +3494,7 @@ async function fetchServerData() {
               "Registros:",
               rows.length
             );
-            if (normalized.escritura && !collected.some(item => normalizarEscritura(item.escritura) === normalizarEscritura(normalized.escritura))) {
+            if (tableName === 'liq' && normalized.escritura && !collected.some(item => normalizarEscritura(item.escritura) === normalizarEscritura(normalized.escritura))) {
               collected.push(normalized);
             }
           });
@@ -3271,7 +3508,7 @@ async function fetchServerData() {
       collected.length
     );
 
-    REGISTROS = collected;
+    REGISTROS = filtrarRegistrosConActasActivas(collected);
     console.log(REGISTROS);
     await cargarDashboardStatus();
     await fetchPagos2026();

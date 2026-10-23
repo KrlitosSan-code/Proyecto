@@ -58,6 +58,34 @@ create index if not exists idx_liq_2026_escritura on public.liq_2026 (escritura)
 create index if not exists idx_liq_2026_fecha_proceso on public.liq_2026 (fecha_proceso);
 create index if not exists idx_liq_2026_estado_ctl on public.liq_2026 (estado_ctl);
 
+create table if not exists public.catalogos_registro (
+    id uuid primary key default gen_random_uuid(),
+    tipo text not null,
+    clave text not null,
+    valor text not null,
+    created_at timestamptz not null default now(),
+    unique (tipo, clave)
+);
+
+insert into public.catalogos_registro (tipo, clave, valor) values
+    ('gobernacion', 'antioquia', 'antioquia'),
+    ('gobernacion', 'atlantico', 'atlantico'),
+    ('gobernacion', 'bolivar', 'bolivar'),
+    ('gobernacion', 'boyaca', 'boyaca'),
+    ('gobernacion', 'cundinamarca', 'cundinamarca'),
+    ('gobernacion', 'magdalena', 'magdalena'),
+    ('gobernacion', 'meta', 'meta'),
+    ('gobernacion', 'santander', 'santander'),
+    ('gobernacion', 'tolima', 'tolima'),
+    ('pago', 'pendiente', 'pendiente'),
+    ('pago', 'ingresado', 'ingresado'),
+    ('notificacion', 'pendiente', 'pendiente'),
+    ('notificacion', 'enviado', 'enviado'),
+    ('estado_ctl', 'pendiente', 'pendiente'),
+    ('estado_ctl', 'descargado', 'descargado'),
+    ('estado_ctl', 'enviado', 'enviado')
+on conflict (tipo, clave) do nothing;
+
 -- Verificación opcional después de ejecutar el script:
 -- select column_name, data_type
 -- from information_schema.columns

@@ -25,25 +25,17 @@ class CertificadosService:
     
     def marcar_procesando(
         self,
-        escritura
+        escritura,
+        tabla_origen=None,
     ):
-        self.repo.supabase.table("liq").update({
-            "estado_ctl": EstadoCTL.PROCESANDO
-        }).eq(
-            "escritura",
-            escritura
-        ).execute()
+        self.repo.actualizar_estado_ctl(escritura, EstadoCTL.PROCESANDO, tabla_origen)
 
     def marcar_enviado(
         self,
-        escritura
+        escritura,
+        tabla_origen=None,
     ):
-        self.repo.supabase.table("liq").update({
-            "estado_ctl": EstadoCTL.ENVIADO
-        }).eq(
-            "escritura",
-            escritura
-        ).execute()
+        self.repo.actualizar_estado_ctl(escritura, EstadoCTL.ENVIADO, tabla_origen)
     
     def marcar_error(
         self,

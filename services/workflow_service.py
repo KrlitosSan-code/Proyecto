@@ -87,7 +87,7 @@ class WorkflowService:
                         )
                         
                     if archivos:
-                        self.certificados.marcar_procesando(escritura)
+                        self.certificados.marcar_procesando(escritura, row.get("tabla_origen"))
 
                         self.logs.registrar(
                             escritura=escritura,
@@ -201,7 +201,7 @@ class WorkflowService:
                     )                
                     print("Correo Creado")     
                     
-                    self.certificados.marcar_enviado(escritura)
+                    self.certificados.marcar_enviado(escritura, row.get("tabla_origen"))
                     
                 except Exception as e:
                     self.logs.registrar(
