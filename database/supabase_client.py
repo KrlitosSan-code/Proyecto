@@ -1,6 +1,7 @@
 import os
 import re
 import re
+import unicodedata
 from typing import Any, Optional, List
 from datetime import datetime
 
@@ -145,7 +146,7 @@ def obtener_descargas_pendientes_de_envio(*args: Any, **kwargs: Any) -> list:
 def marcar_descarga_como_enviada(*args: Any, **kwargs: Any) -> dict:
     return {"ok": True}
 
-def import_liq_from_rows(rows: list, batch_size: int = 200) -> dict:
+def import_liq_from_rows(rows: list, batch_size: int = 200, payment_rows: list = None) -> dict:
     """
     Importa filas de liquidación (Informe_Not_38_Liq) a la tabla 'liq_2026'.
     
@@ -196,10 +197,46 @@ def import_liq_from_rows(rows: list, batch_size: int = 200) -> dict:
               .execute()
             actualizados += 1
 
+        pagos_actualizados = 0
+        pagos_importados = payment_rows or []
+        pagos_existentes = {}
+        escrituras_pago = list({
+            row['escritura'] for row in pagos_importados
+            if row.get('escritura') is not None
+        })
+        for i in range(0, len(escrituras_pago), 200):
+            chunk = escrituras_pago[i:i + 200]
+            response = (
+                db.table('pagos_2026')
+                .select('escritura,vr_ben,vr_reg,liquidacion,fecha_pago')
+                .in_('escritura', chunk)
+                .execute()
+            )
+            for pago in response.data or []:
+                pagos_existentes[pago['escritura']] = pago
+
+        for i in range(0, len(pagos_importados), batch_size):
+            batch = []
+            for pago in pagos_importados[i:i + batch_size]:
+                existente = pagos_existentes.get(pago['escritura'], {})
+                fila = {'escritura': pago['escritura']}
+                for campo in ('vr_ben', 'vr_reg'):
+                    valor = pago.get(campo, existente.get(campo))
+                    fila[campo] = 0 if valor is None else valor
+                for campo in ('liquidacion', 'fecha_pago'):
+                    valor = pago.get(campo, existente.get(campo))
+                    if valor is not None:
+                        fila[campo] = valor
+                batch.append(fila)
+            if batch:
+                db.table('pagos_2026').upsert(batch, on_conflict='escritura').execute()
+                pagos_actualizados += len(batch)
+
         return {
             "nuevos":      nuevos,
             "actualizados": actualizados,
             "total":       nuevos + actualizados,
+            "pagos_actualizados": pagos_actualizados,
         }
 
     except Exception as e:
@@ -239,6 +276,14 @@ def update_liq_row(escritura: str, row: dict) -> Any:
         return response
     except Exception:
         raise
+
+def update_liq_row_in_table(table_name: str, escritura: str, row: dict) -> Any:
+    if table_name not in {'liq_2025', 'liq_2026'}:
+        raise ValueError(f"Tabla no permitida: {table_name}")
+    db = get_supabase()
+    if not db:
+        raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
+    return db.table(table_name).update(row).eq('escritura', escritura).execute()
 
 def get_pending_liq(limit: int = 10000, page: int = 1, sort_by: str = 'escritura', desc: bool = False) -> Any:
     """Obtiene registros pendientes (sin procesar) desde Supabase."""
@@ -450,6 +495,7 @@ def insert_acta(row: dict) -> Any:
         raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
 
     try:
+        row.setdefault('estado', 'activa')
         response = db.table('actas').insert(row).execute()
 
         escritura = row.get('escritura')
@@ -476,6 +522,41 @@ def get_actas_by_escritura(escritura, anio: int = 2026) -> list:
     except Exception as e:
         print(f"Error en get_actas_by_escritura: {e}")
         return []
+
+def acta_esta_activa(acta: dict) -> bool:
+    estado = re.sub(r'\s+', ' ', str(acta.get('estado') or '').strip().casefold())
+    estado = ''.join(
+        char for char in unicodedata.normalize('NFD', estado)
+        if unicodedata.category(char) != 'Mn'
+    )
+    return estado not in {
+        'retirada', 'retirado', 'retiradas', 'retirados',
+        'anulada', 'anulado', 'anuladas', 'anulados',
+        'cancelada', 'cancelado', 'canceladas', 'cancelados',
+    }
+
+def get_escrituras_con_actas_activas(anio: int = 2026) -> list[str]:
+    db = get_supabase()
+    if not db:
+        return []
+    response = db.table('actas').select('escritura,estado').eq('anio', anio).execute()
+    return sorted({
+        str(acta.get('escritura'))
+        for acta in (response.data or [])
+        if acta.get('escritura') is not None and acta_esta_activa(acta)
+    })
+
+def retirar_actas_por_escritura(escritura, anio: int = 2026) -> Any:
+    db = get_supabase()
+    if not db:
+        raise Exception("Supabase no configurado. Verifique SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en .env")
+    return (
+        db.table('actas')
+        .update({'estado': 'retirada'})
+        .eq('escritura', escritura)
+        .eq('anio', anio)
+        .execute()
+    )
 
 def get_acta_by_id(acta_id: int) -> dict:
     """Devuelve una acta por su id."""
@@ -552,8 +633,8 @@ def get_pagos_2026_resumen(anio: int = 2026) -> list:
         return []
 
     try:
-        actas_resp = db.table('actas').select('escritura,tipo_deposito,valor_acta').eq('anio', anio).execute()
-        actas = actas_resp.data or []
+        actas_resp = db.table('actas').select('escritura,tipo_deposito,valor_acta,estado').eq('anio', anio).execute()
+        actas = [a for a in (actas_resp.data or []) if acta_esta_activa(a)]
 
         pagos_resp = db.table('pagos_2026').select('*').execute()
         pagos_por_escritura = {p['escritura']: p for p in (pagos_resp.data or [])}
@@ -603,9 +684,12 @@ def get_pagos_2026_resumen(anio: int = 2026) -> list:
         print(f"Error en get_pagos_2026_resumen: {e}")
         return []
 
-def upsert_pago_2026(escritura, vr_ben: float = None, vr_reg: float = None,
-                      fecha_pago: str = None, observaciones: str = None,
-                      liquidacion: str = None, responsable: str = None) -> Any:
+_UNSET_PAGO_2026 = object()
+
+
+def upsert_pago_2026(escritura, vr_ben: Any = _UNSET_PAGO_2026, vr_reg: Any = _UNSET_PAGO_2026,
+                      fecha_pago: Any = _UNSET_PAGO_2026, observaciones: Any = _UNSET_PAGO_2026,
+                      liquidacion: Any = _UNSET_PAGO_2026, responsable: Any = _UNSET_PAGO_2026) -> Any:
     """Crea o actualiza los valores manuales (Vr_Ben, Vr_Reg, fecha proyectada de pago) de una escritura."""
     db = get_supabase()
     if not db:
@@ -613,12 +697,12 @@ def upsert_pago_2026(escritura, vr_ben: float = None, vr_reg: float = None,
 
     try:
         payload = {'escritura': escritura}
-        if vr_ben is not None: payload['vr_ben'] = vr_ben
-        if vr_reg is not None: payload['vr_reg'] = vr_reg
-        if fecha_pago is not None: payload['fecha_pago'] = fecha_pago
-        if observaciones is not None: payload['observaciones'] = observaciones
-        if liquidacion is not None: payload['liquidacion'] = liquidacion
-        if responsable is not None: payload['responsable'] = responsable
+        if vr_ben is not _UNSET_PAGO_2026: payload['vr_ben'] = vr_ben
+        if vr_reg is not _UNSET_PAGO_2026: payload['vr_reg'] = vr_reg
+        if fecha_pago is not _UNSET_PAGO_2026: payload['fecha_pago'] = fecha_pago
+        if observaciones is not _UNSET_PAGO_2026: payload['observaciones'] = observaciones
+        if liquidacion is not _UNSET_PAGO_2026: payload['liquidacion'] = liquidacion
+        if responsable is not _UNSET_PAGO_2026: payload['responsable'] = responsable
 
         response = db.table('pagos_2026').upsert(payload, on_conflict='escritura').execute()
         return response
@@ -645,6 +729,7 @@ def import_actas_from_rows(rows: list, batch_size: int = 200) -> dict:
 
         a_insertar = []
         for r in rows:
+            r.setdefault('estado', 'activa')
             key = (str(r.get('acta')), r.get('escritura'))
             if key in existentes:
                 continue

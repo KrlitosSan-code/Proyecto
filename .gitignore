@@ -29,3 +29,5 @@ Thumbs.db
 
 # Local runtime data
 *.sqlite3
+/catalogos_registro.json
+/catalogos_registro.tmp
